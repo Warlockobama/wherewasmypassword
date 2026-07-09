@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { parseBackup } from '../storage/backup.ts'
+import { saveVault, type StoredVault } from '../storage/db.ts'
 import { Button, Panel, Progress, Screen, Title } from '../ui.tsx'
 
 const PAGES: { title: string; body: React.ReactNode }[] = [
@@ -53,9 +55,27 @@ const PAGES: { title: string; body: React.ReactNode }[] = [
   },
 ]
 
-export default function Welcome({ onComplete }: { onComplete: () => void }) {
+export default function Welcome({
+  onComplete,
+  onRestored,
+}: {
+  onComplete: () => void
+  onRestored: (stored: StoredVault) => void
+}) {
   const [page, setPage] = useState(0)
+  const [error, setError] = useState<string | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
   const last = page === PAGES.length - 1
+
+  const restore = async (file: File) => {
+    try {
+      const restored = parseBackup(await file.text())
+      await saveVault(restored)
+      onRestored(restored)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
 
   return (
     <Screen>
@@ -72,6 +92,25 @@ export default function Welcome({ onComplete }: { onComplete: () => void }) {
           {last ? 'Take the practice walk' : 'Next'}
         </Button>
       </div>
+      <button
+        type="button"
+        className="text-sm text-dusk/60 underline underline-offset-2 hover:text-dusk"
+        onClick={() => fileRef.current?.click()}
+      >
+        Already have a vault backup? Restore it
+      </button>
+      {error && <p className="text-sm font-semibold text-brick">{error}</p>}
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".json,application/json"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0]
+          if (f) void restore(f)
+          e.target.value = ''
+        }}
+      />
     </Screen>
   )
 }

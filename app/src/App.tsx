@@ -120,7 +120,16 @@ export default function App() {
     case 'loading':
       return null
     case 'welcome':
-      return <Welcome onComplete={() => setPhase('demo')} />
+      return (
+        <Welcome
+          onComplete={() => setPhase('demo')}
+          onRestored={(restoredVault) => {
+            setStored(restoredVault)
+            setMeta({ createdAt: restoredVault.createdAt, practicedAt: [] })
+            setPhase('locked')
+          }}
+        />
+      )
     case 'demo':
       return <DemoWalk onComplete={() => setPhase('generate')} />
     case 'generate':
