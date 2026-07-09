@@ -1,0 +1,77 @@
+import { useState } from 'react'
+import { Button, Panel, Progress, Screen, Title } from '../ui.tsx'
+
+const PAGES: { title: string; body: React.ReactNode }[] = [
+  {
+    title: 'Where Was My Password',
+    body: (
+      <>
+        <p>
+          This is a password manager with one unusual promise: <strong>you will actually remember your
+          master password</strong> — a long, random, genuinely strong one — without writing it down.
+        </p>
+        <p>
+          Everything else gets stored encrypted on this device, locked by that single passphrase. You
+          only ever have to remember one thing. Let&apos;s make sure you remember it forever.
+        </p>
+      </>
+    ),
+  },
+  {
+    title: 'The Method of Loci',
+    body: (
+      <>
+        <p>
+          For 2,500 years, memory champions have used the same trick — the <em>method of loci</em>,
+          popularized by the book <em>Moonwalking with Einstein</em>. Your spatial memory is vastly
+          stronger than your working memory. You forget phone numbers; you never forget the layout of
+          your childhood home.
+        </p>
+        <p>
+          The trick: place vivid, absurd images at spots along a route through a space you know. To
+          recall, you simply walk the route in your mind and <em>look</em> at what you left there.
+        </p>
+      </>
+    ),
+  },
+  {
+    title: 'Your Memory House',
+    body: (
+      <>
+        <p>
+          We&apos;ll give you a little house with a fixed route through it: mailbox, doormat, coat
+          closet, fireplace, oven, fridge, mirror, wardrobe. Your master passphrase will be a handful
+          of random words — and you&apos;ll hide each one somewhere along that route, wrapped in an
+          image too weird to forget.
+        </p>
+        <p>
+          Then you&apos;ll walk the house forwards and backwards until the phrase is simply… there.
+          First, a quick practice walk with training wheels.
+        </p>
+      </>
+    ),
+  },
+]
+
+export default function Welcome({ onComplete }: { onComplete: () => void }) {
+  const [page, setPage] = useState(0)
+  const last = page === PAGES.length - 1
+
+  return (
+    <Screen>
+      <Title>{PAGES[page].title}</Title>
+      <Progress current={page} total={PAGES.length} />
+      <Panel className="space-y-3 leading-relaxed">{PAGES[page].body}</Panel>
+      <div className="flex gap-3">
+        {page > 0 && (
+          <Button variant="secondary" onClick={() => setPage(page - 1)}>
+            Back
+          </Button>
+        )}
+        <Button onClick={() => (last ? onComplete() : setPage(page + 1))}>
+          {last ? 'Take the practice walk' : 'Next'}
+        </Button>
+      </div>
+    </Screen>
+  )
+}
