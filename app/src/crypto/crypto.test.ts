@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { EFF_WORDLIST } from './eff-wordlist.ts'
+import { IMAGEABLE_WORDLIST } from './imageable-wordlist.ts'
 import { randomInt } from './random.ts'
 import {
   generatePassphrase,
@@ -37,15 +38,25 @@ const sampleVault: VaultData = {
 }
 
 describe('wordlist', () => {
-  it('has 7776 unique words', () => {
+  it('has 7776 unique words in the EFF source list', () => {
     expect(EFF_WORDLIST.length).toBe(7776)
     expect(new Set(EFF_WORDLIST).size).toBe(7776)
   })
 
-  it('generates the requested number of words, all from the list', () => {
+  it('imageable list is a healthy, unique, lowercase subset of the EFF list', () => {
+    expect(IMAGEABLE_WORDLIST.length).toBeGreaterThanOrEqual(2048) // >= 11 bits/word
+    expect(new Set(IMAGEABLE_WORDLIST).size).toBe(IMAGEABLE_WORDLIST.length)
+    const eff = new Set(EFF_WORDLIST)
+    for (const w of IMAGEABLE_WORDLIST) {
+      expect(eff.has(w)).toBe(true)
+      expect(w).toMatch(/^[a-z]+$/)
+    }
+  })
+
+  it('generates the requested number of words, all from the imageable list', () => {
     const words = generatePassphrase(6)
     expect(words).toHaveLength(6)
-    const set = new Set(EFF_WORDLIST)
+    const set = new Set(IMAGEABLE_WORDLIST)
     for (const w of words) expect(set.has(w)).toBe(true)
   })
 
@@ -63,8 +74,8 @@ describe('wordlist', () => {
     expect(rerolled).not.toBe(words) // no mutation
   })
 
-  it('reports ~12.9 bits per word', () => {
-    expect(phraseEntropyBits(6)).toBeCloseTo(77.5, 0)
+  it('reports entropy from the real size of the generation list', () => {
+    expect(phraseEntropyBits(6)).toBeCloseTo(6 * Math.log2(IMAGEABLE_WORDLIST.length), 1)
   })
 
   it('normalizes case and whitespace', () => {

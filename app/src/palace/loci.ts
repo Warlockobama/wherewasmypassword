@@ -80,7 +80,7 @@ export const LOCI: readonly Locus[] = [
   },
   {
     id: 'mirror', name: 'Mirror Cabinet', sceneId: 'hallway', openVerb: 'swing open', prompt: 'behind the hallway mirror',
-    anchor: { name: 'the vampire flossing his fangs', emoji: '🧛', doing: 'grinning at himself even though he has no reflection' },
+    anchor: { name: 'the flossing vampire', emoji: '🧛', doing: 'flossing his fangs and grinning at himself, even though he has no reflection' },
   },
   {
     id: 'wardrobe', name: 'Wardrobe', sceneId: 'bedroom', openVerb: 'open the doors of', prompt: 'in the bedroom wardrobe',

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { IMAGEABLE_WORDLIST } from '../crypto/imageable-wordlist.ts'
 import {
   DEFAULT_WORDS,
   MAX_WORDS,
@@ -25,9 +26,12 @@ export default function PhraseGenerator({ onComplete }: { onComplete: (words: st
       <Title>Your Master Passphrase</Title>
       <Panel className="space-y-2 text-sm leading-relaxed">
         <p>
-          These words are chosen by cryptographic dice from a list of 7,776 — no one, including you,
-          gets to pick them. That randomness is the entire strength of your vault, so don&apos;t hunt
-          for words you &quot;like&quot;; re-roll only if a word feels impossible to picture.
+          These words are chosen by cryptographic dice from a list of{' '}
+          {IMAGEABLE_WORDLIST.length.toLocaleString()} <em>picturable</em> words — things you can
+          actually see, hold, or watch move, because that&apos;s what the house needs. No one,
+          including you, gets to pick them: that randomness is the entire strength of your vault, so
+          don&apos;t hunt for words you &quot;like&quot;; re-roll only if a word refuses to become an
+          image.
         </p>
         <p className="text-dusk/70">
           You won&apos;t need to write these down. The house will hold them until your head does.
@@ -79,13 +83,20 @@ export default function PhraseGenerator({ onComplete }: { onComplete: (words: st
       <div className="w-full max-w-md">
         <div className="h-3 overflow-hidden rounded-full bg-dusk/15">
           <div
-            className={`h-full rounded-full transition-all ${bits >= 75 ? 'bg-sage' : 'bg-amber-glow'}`}
-            style={{ width: `${Math.min(100, (bits / 104) * 100)}%` }}
+            className={`h-full rounded-full transition-all ${bits >= 65 ? 'bg-sage' : 'bg-amber-glow'}`}
+            style={{ width: `${Math.min(100, (bits / 90) * 100)}%` }}
           />
         </div>
         <p className="mt-1 text-center text-xs text-dusk/70">
-          ~{bits} bits of entropy — {bits >= 90 ? 'excessive, in a good way' : bits >= 75 ? 'very strong' : 'strong'}.
-          Behind slow key-stretching, brute force is out of reach.
+          ~{bits} bits of entropy —{' '}
+          {bits >= 85
+            ? 'excessive, in a good way'
+            : bits >= 75
+              ? 'extremely strong'
+              : bits >= 65
+                ? 'very strong'
+                : 'strong'}
+          . Behind slow key-stretching, brute force is out of reach.
         </p>
       </div>
 

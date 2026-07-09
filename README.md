@@ -23,8 +23,11 @@ you can't hide something in a drawer and open it later. The illustrated house ca
 ## The app (v1) — `app/`
 
 - **Tutorial**: the method explained, then a risk-free demo walk with a throwaway phrase.
-- **Generation**: diceware passphrase from the EFF large wordlist (5–8 words, default 6
-  ≈ 77.5 bits), rolled with `crypto.getRandomValues`, per-word re-roll.
+- **Generation**: diceware passphrase (5–8 words, default 6 ≈ 67 bits) rolled with
+  `crypto.getRandomValues` from the EFF large wordlist filtered to **picturable words
+  only** (concreteness ≥ 4.0 in the Brysbaert et al. norms, 2,257 words) — the method of
+  loci can't hang "dispersed" on a mailbox, but it can hang a zeppelin. Entropy is
+  computed from the filtered list's true size; per-word re-roll.
 - **Placement journey**: room by room, craft a vivid image for each word, place it, and
   watch the compartment close over it.
 - **Training gauntlet**: forward walk → backward walk → random spot-checks (all requiring

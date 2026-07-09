@@ -1,7 +1,9 @@
-import { EFF_WORDLIST } from './eff-wordlist.ts'
+import { IMAGEABLE_WORDLIST } from './imageable-wordlist.ts'
 import { randomInt } from './random.ts'
 
-export const BITS_PER_WORD = Math.log2(EFF_WORDLIST.length) // 12.92 for 7776
+// Generation draws from the concreteness-filtered list (picturable words only);
+// entropy is honestly computed from that list's real size.
+export const BITS_PER_WORD = Math.log2(IMAGEABLE_WORDLIST.length) // 11.14 for 2257
 
 export const MIN_WORDS = 5
 export const MAX_WORDS = 8
@@ -31,5 +33,5 @@ export function normalizePassphrase(input: string): string {
 }
 
 function randomWord(): string {
-  return EFF_WORDLIST[randomInt(EFF_WORDLIST.length)]
+  return IMAGEABLE_WORDLIST[randomInt(IMAGEABLE_WORDLIST.length)]
 }
