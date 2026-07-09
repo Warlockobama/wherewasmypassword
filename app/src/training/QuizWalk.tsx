@@ -41,9 +41,9 @@ export default function QuizWalk({
   // Unopened stops show nothing; the current stop shows the real card only after answering.
   const clues = {
     [locus.id]: revealed ? (
-      <ClueCard word={assoc.word} imagery={assoc.imagery} />
+      <ClueCard word={assoc.word} imagery={assoc.imagery} anchorEmoji={locus.anchor.emoji} />
     ) : (
-      <MysteryCard />
+      <MysteryCard anchorEmoji={locus.anchor.emoji} />
     ),
   }
 
@@ -89,7 +89,8 @@ export default function QuizWalk({
           <>
             <p>
               Stop {pos + 1} of {order.length}: what did you hide{' '}
-              <strong>{locus.prompt}</strong>?
+              <strong>{locus.prompt}</strong>?{' '}
+              <span className="text-dusk/60">({locus.anchor.name} is holding it)</span>
             </p>
             <form
               className="flex justify-center gap-2"

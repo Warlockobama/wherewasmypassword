@@ -112,12 +112,18 @@ export function ClueSlot({
 /**
  * The placed memory object: a luminous card bearing the word and the user's
  * vivid-imagery text. Scenes position/scale a CLUE_W x CLUE_H slot for it.
+ * The locus's resident anchor peeks from the corner as the second memory hook.
  */
-export function ClueCard({ word, imagery }: { word: string; imagery?: string }) {
+export function ClueCard({ word, imagery, anchorEmoji }: { word: string; imagery?: string; anchorEmoji?: string }) {
   return (
     <g>
       <rect width={CLUE_W} height={CLUE_H} rx={10} fill={P.amberLight} stroke={P.amber} strokeWidth={3} />
       <rect x={5} y={5} width={CLUE_W - 10} height={CLUE_H - 10} rx={7} fill={P.cream} />
+      {anchorEmoji && (
+        <text x={CLUE_W - 4} y={22} textAnchor="end" fontSize={20}>
+          {anchorEmoji}
+        </text>
+      )}
       <foreignObject x={8} y={6} width={CLUE_W - 16} height={CLUE_H - 12}>
         <div
           style={{
@@ -154,8 +160,12 @@ export function ClueCard({ word, imagery }: { word: string; imagery?: string }) 
   )
 }
 
-/** Placeholder shown in quizzes before the compartment is opened honestly. */
-export function MysteryCard() {
+/**
+ * Placeholder shown in quizzes before the compartment is opened honestly.
+ * The resident anchor stays visible — it's a legitimate recall hook, not a
+ * spoiler: the word is what you fused WITH the resident.
+ */
+export function MysteryCard({ anchorEmoji }: { anchorEmoji?: string }) {
   return (
     <g>
       <rect width={CLUE_W} height={CLUE_H} rx={10} fill={P.dusk} stroke={P.duskLight} strokeWidth={3} />
@@ -170,6 +180,11 @@ export function MysteryCard() {
       >
         ?
       </text>
+      {anchorEmoji && (
+        <text x={CLUE_W / 2} y={82} textAnchor="middle" fontSize={24}>
+          {anchorEmoji}
+        </text>
+      )}
     </g>
   )
 }

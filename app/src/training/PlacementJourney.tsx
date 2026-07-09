@@ -10,7 +10,7 @@ const COACHING = [
   'Add motion: let it spin, drip, explode, or crawl.',
   'Involve a sense: a smell, a sound, a texture.',
   'Make it absurd — dignity is the enemy of memory.',
-  'Let it interact with the spot: jammed in, overflowing, wearing it.',
+  'Let them wear it, eat it, juggle it, or fight it.',
   'Add emotion: something hilarious, gross, or alarming.',
   'Give it a color that clashes with everything.',
   'Exaggerate the quantity: not one — hundreds.',
@@ -35,7 +35,10 @@ export default function PlacementJourney({
   const isPlaced = placed.length > step
 
   const clues = Object.fromEntries(
-    placed.map((a) => [a.locusId, <ClueCard key={a.locusId} word={a.word} imagery={a.imagery} />]),
+    placed.map((a) => {
+      const anchor = LOCI.find((l) => l.id === a.locusId)?.anchor
+      return [a.locusId, <ClueCard key={a.locusId} word={a.word} imagery={a.imagery} anchorEmoji={anchor?.emoji} />]
+    }),
   )
 
   const place = () => {
@@ -87,14 +90,20 @@ export default function PlacementJourney({
         ) : !isPlaced ? (
           <>
             <p className="text-center">
-              Picture <strong className="font-display text-xl uppercase">{word}</strong> {locus.prompt}.{' '}
-              <em className="text-dusk/80">{COACHING[step % COACHING.length]}</em>
+              {locus.anchor.emoji} Meet the resident: <strong>{locus.anchor.name}</strong>,{' '}
+              {locus.anchor.doing}. They live here — they never leave.
+            </p>
+            <p className="text-center">
+              Now fuse <strong className="font-display text-xl uppercase">{word}</strong> with them.{' '}
+              <em className="text-dusk/80">{COACHING[step % COACHING.length]}</em> And remember the
+              book&apos;s rule: the lewder and more outrageous your private version, the harder it
+              sticks — nobody will ever see it but you.
             </p>
             <textarea
               value={imagery}
               onChange={(e) => setImagery(e.target.value)}
               rows={2}
-              placeholder={`e.g. "a ${word} ${locus.prompt}, …" — describe the image in your own words`}
+              placeholder={`e.g. "${locus.anchor.name} juggling ${word}s, ${locus.prompt}…" — your scene, your words`}
               className="w-full rounded-lg border-2 border-dusk/40 bg-parchment p-2 text-sm focus:border-amber-glow focus:outline-none"
             />
             <div className="flex justify-center">

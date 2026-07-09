@@ -30,7 +30,11 @@ export default function UnlockedHome({
       const assoc = data.associations.find((a) => a.locusId === l.id)
       return [
         l.id,
-        assoc ? <ClueCard key={l.id} word={assoc.word} imagery={assoc.imagery} /> : <EmptySlot key={l.id} />,
+        assoc ? (
+          <ClueCard key={l.id} word={assoc.word} imagery={assoc.imagery} anchorEmoji={l.anchor.emoji} />
+        ) : (
+          <EmptySlot key={l.id} />
+        ),
       ]
     }),
   )

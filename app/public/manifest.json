@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Where Was My Password",
+  "version": "1.0.0",
+  "description": "A password manager you unlock by walking your memory palace. Learn one strong passphrase for life; everything stays encrypted on your device.",
+  "action": {
+    "default_title": "Open your memory house"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'"
+  }
+}

@@ -4,11 +4,14 @@ import { LOCI } from '../palace/loci.ts'
 import { ClueCard } from '../palace/rooms/shared.tsx'
 import { Button, Panel, Screen, Title } from '../ui.tsx'
 
-/** Fixed, throwaway demo phrase — teaches the mechanics risk-free. */
+/**
+ * Fixed, throwaway demo phrase — teaches the mechanics risk-free. Each image
+ * is fused with the locus's permanent resident to demonstrate anchoring.
+ */
 const DEMO = [
-  { word: 'piano', imagery: 'a tiny grand piano crammed inside, keys jangling wildly' },
-  { word: 'tornado', imagery: 'a miniature tornado spinning under it, flinging dust everywhere' },
-  { word: 'butter', imagery: 'every coat dripping with melted butter' },
+  { word: 'piano', imagery: 'the sumo wrestler is crushing a tiny grand piano under his belly, keys shrieking' },
+  { word: 'tornado', imagery: 'grandma is can-canning inside a miniature tornado, fishnets flapping' },
+  { word: 'butter', imagery: 'Elvis is slathering every coat with melted butter, thong glistening' },
 ]
 
 type Stage = 'walk' | 'quiz-forward' | 'quiz-backward' | 'done'
@@ -21,7 +24,10 @@ export default function DemoWalk({ onComplete }: { onComplete: () => void }) {
 
   const locus = LOCI[step]
   const clues = Object.fromEntries(
-    DEMO.map((d, i) => [LOCI[i].id, <ClueCard key={i} word={d.word} imagery={d.imagery} />]),
+    DEMO.map((d, i) => [
+      LOCI[i].id,
+      <ClueCard key={i} word={d.word} imagery={d.imagery} anchorEmoji={LOCI[i].anchor.emoji} />,
+    ]),
   )
 
   const advanceWalk = () => {
@@ -63,7 +69,12 @@ export default function DemoWalk({ onComplete }: { onComplete: () => void }) {
               <div className="space-y-3">
                 <p>
                   <strong className="uppercase">{DEMO[step].word}</strong> — picture it:{' '}
-                  <em>{DEMO[step].imagery}</em>. The weirder the image, the harder it is to forget.
+                  <em>{DEMO[step].imagery}</em>
+                </p>
+                <p className="text-sm text-dusk/70">
+                  {locus.anchor.emoji} Notice <strong>{locus.anchor.name}</strong> — they live at this
+                  stop permanently. That&apos;s the <em>anchor</em>: a shocking resident your memory
+                  grabs onto, so the word never floats free. The weirder, the stickier.
                 </p>
                 <Button onClick={advanceWalk}>
                   {step < DEMO.length - 1 ? 'Walk to the next stop →' : 'End of the route'}
@@ -77,12 +88,12 @@ export default function DemoWalk({ onComplete }: { onComplete: () => void }) {
       {stage === 'quiz-forward' && (
         <QuizCard
           key="fwd"
-          question={`Without looking — what was ${LOCI[1].prompt}?`}
+          question={`Without looking — what was ${LOCI[1].prompt}? (Grandma was dancing in it.)`}
           options={['piano', 'tornado', 'butter']}
           correct="tornado"
           answer={answer}
           onAnswer={setAnswer}
-          explain="You just walked the route: mailbox → doormat → closet. Your mind replays the walk and finds the tornado under the mat."
+          explain="You just walked the route: mailbox → doormat → closet. Your mind replays the walk, finds grandma mid-can-can, and there's the tornado around her. The resident pulls the word back."
           onNext={() => {
             setStage('quiz-backward')
             setAnswer(null)

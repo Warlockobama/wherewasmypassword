@@ -1,13 +1,20 @@
 # Where Was My Password
 
-A password manager with one unusual promise: **you will actually remember your master
-passphrase** — a long, random, genuinely strong one — without ever writing it down.
+A password manager (browser extension) with one unusual promise: **you will actually
+remember your master passphrase** — a long, random, genuinely strong one — without ever
+writing it down.
 
 Inspired by *Moonwalking with Einstein* and the 2,500-year-old **method of loci**: spatial
 memory vastly outperforms working memory, so the app teaches you to hide each word of a
 randomly generated passphrase at a spot along a fixed route through an illustrated house
 (mailbox → doormat → coat closet → fireplace → oven → fridge → mirror → wardrobe), wrapped
 in a vivid image of your own invention. Recall = walking the route in your mind.
+
+Each locus also has a permanent, outrageous **resident** (the sumo wrestler in the mailbox,
+Elvis in the coat closet, Einstein in a bikini in the fridge…) — the book's *anchoring*
+technique: fusing your word with a shocking, emotionally charged character gives memory a
+second handle. The app keeps its residents PG-13 and coaches you to make your private
+mental version as lewd as you dare, which is, per the book, exactly what works.
 
 Earlier prototypes (in `wherewasmypassword/`, `go_wwmp/`, `deeps/`) tried Google Street View
 as the memory space; they died on the same rock: real-map imagery can't do **occlusion** —
@@ -46,7 +53,17 @@ cd app
 npm install
 npm run dev    # http://localhost:5199
 npm test       # vitest: crypto, backup, schedule suites
-npm run build  # static production build in dist/, CSP injected
+npm run build  # production build in dist/ (web page + extension), CSP injected
 ```
 
-Deploy `app/dist/` to any static host. There is nothing else to run.
+### Install as a browser extension
+
+1. `npm run build` in `app/`
+2. Open `chrome://extensions` (or `edge://extensions`), enable **Developer mode**
+3. **Load unpacked** → select `app/dist`
+4. Click the toolbar button — the memory house opens in a tab
+
+The same `dist/` also works as a plain static site on any host; the extension wrapper is
+`public/manifest.json` + `public/background.js`. Vault data lives in the extension's own
+IndexedDB, so the web version and extension version have separate vaults — use the
+encrypted backup export/import to move between them.

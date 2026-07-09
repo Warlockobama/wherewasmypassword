@@ -33,6 +33,12 @@ const PAGES: { title: string; body: React.ReactNode }[] = [
           The trick: place vivid, absurd images at spots along a route through a space you know. To
           recall, you simply walk the route in your mind and <em>look</em> at what you left there.
         </p>
+        <p>
+          And the book&apos;s dirty secret: the images that stick hardest are the lewd, crude,
+          outrageous ones. Every stop in your house has a permanent, ridiculous <strong>resident</strong>{' '}
+          — an anchor your memory grabs onto. You&apos;ll fuse each word with them, as scandalously
+          as you like. It stays in your head; no one else ever sees it.
+        </p>
       </>
     ),
   },
