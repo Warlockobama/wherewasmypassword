@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Georgia", "Times New Roman", serif;
+  --color-ink: #2b2337;
+  --color-parchment: #f6efe3;
+  --color-parchment-dark: #eadfca;
+  --color-amber-glow: #e8a03d;
+  --color-sage: #7a9e7e;
+  --color-dusk: #4a3f63;
+  --color-brick: #b5654a;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-parchment);
+  color: var(--color-ink);
+}
