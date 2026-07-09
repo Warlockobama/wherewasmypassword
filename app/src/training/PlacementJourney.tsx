@@ -95,7 +95,8 @@ export default function PlacementJourney({
             </p>
             <p className="text-center">
               Now fuse <strong className="font-display text-xl uppercase">{word}</strong> with them.{' '}
-              <em className="text-dusk/80">{COACHING[step % COACHING.length]}</em> And remember the
+              <em className="text-dusk/80">{COACHING[step % COACHING.length]}</em> Abstract word? Have
+              the resident <em>act it out</em>, or picture something it sounds like. And remember the
               book&apos;s rule: the lewder and more outrageous your private version, the harder it
               sticks — nobody will ever see it but you.
             </p>
@@ -103,7 +104,7 @@ export default function PlacementJourney({
               value={imagery}
               onChange={(e) => setImagery(e.target.value)}
               rows={2}
-              placeholder={`e.g. "${locus.anchor.name} juggling ${word}s, ${locus.prompt}…" — your scene, your words`}
+              placeholder={`What do you see? ${locus.anchor.name} + “${word}” ${locus.prompt}…`}
               className="w-full rounded-lg border-2 border-dusk/40 bg-parchment p-2 text-sm focus:border-amber-glow focus:outline-none"
             />
             <div className="flex justify-center">
