@@ -1,7 +1,13 @@
 # 0009 — Vault format hardening, and popup vs tab for autofill
 
-**Status:** OPEN — needs James's call on four things. Item 3 is no longer a
-suspicion: autofill has been tested in a real browser and does not work at all.
+**Status:** SPLIT (2026-07-30) — superseded by four separate OPEN docs, one per
+question, so each can be surfaced and answered on its own. Answer them there;
+this doc is kept as the background write-up. The splits:
+
+- `0011-autofill-popup-or-remembered-tab.md` (was item 3 — answer this first)
+- `0012-change-master-passphrase.md` (was item 4)
+- `0013-kdf-parameter-upgrade-on-unlock.md` (was item 2)
+- `0014-pad-ciphertext-and-bind-header.md` (was item 1)
 
 Follows the adversarial review in `0008`. Everything in that review that could
 be fixed without changing the vault format or the product's shape has been

@@ -7,3 +7,4 @@
 - 2026-07-30 UPDATE 0006-mobile-version-proposal.md — 1. **Adopt the recommended PWA path as the starting approach**: James said "That seems reasonable" in response to the PW
 - 2026-07-30 RESOLVED 0006-mobile-version-proposal.md — 1. **Defer a mobile app and focus on the extension**: James said "maybe we should focus on the extension itself." Treat 
 - 2026-07-30 DIRECTIVE 0008-adversarial-review-compromised-browser-risk.md — James says: "Focus on what happens if the user's browser is compromised. Will the user's memorized password be enough to
+- 2026-07-30 DIRECTIVE 0010-status-check-what-are-you-working.md — James is checking in. Reply by appending a `## Status report (date)` section to this doc, and keep it short — it gets re
