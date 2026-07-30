@@ -153,8 +153,8 @@ export default function UnlockedHome({
         </div>
         <p className="text-sm text-dusk/80">
           {isExtensionContext()
-            ? 'Autofill injects credentials directly into the login page — no clipboard exposure. Use Copy as a fallback; it auto-clears after 30 seconds.'
-            : 'Copy puts a password on the clipboard just long enough to paste it — it auto-clears after 30 seconds. Install the browser extension for autofill that skips the clipboard entirely.'}
+            ? 'Autofill types a password straight into the login page, so it never touches the clipboard. Copy is the fallback: it is cleared 30 seconds after you come back to this tab, though your operating system may keep its own clipboard history.'
+            : 'Copy puts a password on the clipboard and clears it 30 seconds after you return to this tab — your operating system may still keep a clipboard history of its own. Install the browser extension for autofill that skips the clipboard entirely.'}
         </p>
         <CredentialList
           credentials={data.entries}

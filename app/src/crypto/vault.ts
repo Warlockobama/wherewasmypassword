@@ -62,10 +62,24 @@ export async function decryptVault(rawKey: Uint8Array, blob: EncryptedBlob): Pro
   } catch {
     throw new WrongPassphraseError()
   }
-  const data = JSON.parse(new TextDecoder().decode(plaintext)) as VaultData
+  // Authentic but unparseable plaintext means a corrupt vault, not a wrong
+  // passphrase — say so rather than surfacing a raw JSON parser message.
+  let data: VaultData
+  try {
+    data = JSON.parse(new TextDecoder().decode(plaintext)) as VaultData
+  } catch {
+    throw new Error('The vault decrypted but its contents are damaged.')
+  }
+  if (!data || typeof data !== 'object' || !Array.isArray(data.words)) {
+    throw new Error('The vault decrypted but its contents are damaged.')
+  }
   // Vaults written before v2 credential storage have no `entries` key; backfill
   // it so every caller can treat the array as always present.
-  return { ...data, entries: data.entries ?? [] }
+  return {
+    ...data,
+    associations: Array.isArray(data.associations) ? data.associations : [],
+    entries: Array.isArray(data.entries) ? data.entries : [],
+  }
 }
 
 export function toBase64(bytes: Uint8Array): string {

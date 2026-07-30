@@ -13,8 +13,12 @@ export interface AutofillRequest {
   password: string
   /** Origin of the stored credential; the page must match it to be filled. */
   expectedOrigin?: string
-  /** Set only after the user was shown the mismatch and chose to continue. */
-  overrideOrigin?: boolean
+  /**
+   * The origin the user was shown and explicitly approved. Carrying the origin
+   * rather than a boolean is what stops the approval being reusable: a page
+   * that navigates between the warning and the click no longer matches it.
+   */
+  overrideOrigin?: string
 }
 
 /**

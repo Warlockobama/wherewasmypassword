@@ -13,10 +13,32 @@ export interface StoredVault {
   updatedAt: number
 }
 
-/** Non-secret practice metadata — reveals nothing about the phrase. */
+/**
+ * Practice metadata, stored in plaintext beside the ciphertext.
+ *
+ * It deliberately holds a count and a single date rather than the list of
+ * unlock timestamps it used to. The list revealed nothing about the passphrase,
+ * but it was a millisecond-resolution activity timeline — sleep schedule,
+ * working hours, travel, absences — readable by anyone with the profile
+ * directory, and it grew forever. The practice schedule only ever consulted the
+ * length and the maximum, so these two fields serve it identically.
+ */
 export interface PracticeMeta {
   createdAt: number
-  practicedAt: number[]
+  practiceCount: number
+  /** null until the first practice unlock. */
+  lastPracticedAt: number | null
+}
+
+/** The pre-privacy-fix shape, kept only so old records can be migrated. */
+interface LegacyPracticeMeta {
+  createdAt: number
+  practicedAt?: number[]
+}
+
+/** A brand-new practice record for a vault created (or restored) at `createdAt`. */
+export function freshPracticeMeta(createdAt: number): PracticeMeta {
+  return { createdAt, practiceCount: 0, lastPracticedAt: null }
 }
 
 interface WwmpDB extends DBSchema {
@@ -74,7 +96,31 @@ export async function savePracticeMeta(meta: PracticeMeta): Promise<void> {
 }
 
 export async function loadPracticeMeta(): Promise<PracticeMeta | undefined> {
-  return (await db()).get('meta', META_KEY)
+  const database = await db()
+  const stored = await database.get('meta', META_KEY)
+  if (!stored) return undefined
+  const migrated = migratePracticeMeta(stored)
+  // Rewrite immediately when the shape changed: the point of the fix is that
+  // the old timeline stops being on disk, not that we stop reading it.
+  if (migrated !== stored) await database.put('meta', migrated, META_KEY)
+  return migrated
+}
+
+/**
+ * Collapse a legacy timestamp list down to a count and a last date. The
+ * timeline is discarded on the next save, which is the point: the fix is only
+ * worth anything if existing records stop carrying it too.
+ */
+export function migratePracticeMeta(stored: PracticeMeta | LegacyPracticeMeta): PracticeMeta {
+  if ('practiceCount' in stored && typeof stored.practiceCount === 'number') {
+    return stored
+  }
+  const legacy = (stored as LegacyPracticeMeta).practicedAt ?? []
+  return {
+    createdAt: stored.createdAt,
+    practiceCount: legacy.length,
+    lastPracticedAt: legacy.length ? legacy.reduce((a, b) => Math.max(a, b)) : null,
+  }
 }
 
 /** Ask the browser not to evict our storage under pressure. */

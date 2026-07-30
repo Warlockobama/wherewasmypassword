@@ -109,3 +109,86 @@ fix likely means a small popup UI, which is a design call — see `0009`.
    and grows forever — a precise activity timeline for anyone with the profile
    directory. Storing a count and a last-practiced date would serve the
    practice schedule identically.
+
+## Second pass (2026-07-30, later the same day)
+
+The review above was re-run adversarially, with the fixes it claims re-checked
+against the code rather than taken on trust, and with the autofill path finally
+exercised in a real browser. Priority 1 and priority 4 are now done.
+
+### Priority 1 is answered: autofill has never worked
+
+`app/scripts/autofill-check.mjs` loads the packed extension into a real
+browser and drives the actual button. Every fill fails: `activeTab` is granted
+to the tab that was active when the toolbar icon was clicked, and the icon's
+first act is to open the app in a *new* tab. The grant and the target are never
+the same tab. See `0009` item 3, which is now confirmed rather than suspected.
+
+The rest of the fill path is sound — with a host permission added as a
+diagnostic, 12 of 13 checks pass. So this is one permission-model problem, not
+a broken feature.
+
+### Where the review above was wrong
+
+- **"Out of reach for anyone, permanently."** True today; "permanently" is not
+  supportable while `0009` item 2 is open. A vault is frozen at its
+  creation-time KDF parameters for life, against improving hardware.
+- **The entropy claim had a hole underneath it.** 66.8 bits is arithmetically
+  right, and the six-word floor cannot be bypassed — but re-rolling was
+  unlimited, uncounted, and described in the code as "entropy-neutral". It is
+  not: the user keeps only the draw they like, which is rejection sampling
+  against a predicate an attacker can buy, because this wordlist was built from
+  published concreteness norms. A user re-rolling until every word felt
+  memorable could reach ~55 bits while the meter still read 66.8. **Fixed:**
+  re-rolls are counted and charged, the meter shows the real number, and a
+  six-bit budget holds the floor at about 60.8 bits.
+- **"The key is zeroed on lock."** Largely theatre, and should not have been
+  listed as a mitigation. The `CryptoKey` really is non-extractable, which is
+  the part that matters. But `fill(0)` reaches one copy of at least five: the
+  Argon2 WASM heap still holds the passphrase bytes and the derived key
+  unwiped, the browser holds an internal key copy per save, the decrypted
+  plaintext was not dropped on lock, and JS strings cannot be zeroed at all.
+- **"Autofill's origin check was fixed."** It was added, but a credential
+  saved without a URL passed an empty origin, which short-circuited the check
+  entirely and filled any page silently — the URL-less entry (router, VPN) was
+  the one with no protection at all. **Fixed:** absent origin now fails closed.
+- **"Our own pages are refused as a fill target."** That guard reads
+  `tab.url`, which an extension holding only `activeTab` never sees. It was
+  inert. **Fixed:** it fails closed, and the content script checks its own
+  protocol first hand.
+- **"Page script could hold the vault open with synthetic events."** Not in the
+  extension build — a web page cannot dispatch events into our document at all.
+  The guard is still right for the hosted build.
+
+### Also fixed in this pass
+
+- The clipboard auto-clear almost never ran: it needed the tab focused, and the
+  entire point of copying a password is to go elsewhere. It now survives being
+  away, re-tries on return, uses wall-clock deadlines, and the UI no longer
+  promises a 30-second stopwatch it cannot deliver.
+- Auto-lock deadlines were `setTimeout` durations, so a laptop asleep for eight
+  hours woke with 28 minutes still on its "absolute" 30-minute cap. Now
+  wall-clock.
+- Locking one tab left other open copies of the UI unlocked, each with its own
+  key. Lock is now broadcast; the toolbar icon focuses the existing tab instead
+  of opening another session.
+- A copied password outlived the key: the pending clear held the plaintext
+  after lock. Lock now clears it.
+- KDF parameters were range-checked on the backup path but not on the stored
+  vault — which is a file on disk. Anyone able to rewrite it could wedge the
+  vault permanently, and the user would be told their passphrase was wrong.
+  The check now lives in `deriveKey`, so no path can miss it.
+- Backup parsing checked presence, not type: `salt: {}` sailed through. It now
+  type-checks, bounds field size, and rebuilds the record field by field.
+- Priority 4 is done: the unlock timeline is replaced by a count and a last
+  date, and existing records are collapsed on the next load.
+- A credential patch could overwrite its own `id` and `createdAt` (found by a
+  new test on a path that had none).
+- Autofill's "fill anyway" carried a bare `true`, so approval was reusable on
+  whatever page happened to be active by the time it arrived; it now carries
+  the origin the user was actually shown.
+
+### Still open
+
+`0009`, now four items: ciphertext padding, header binding, the KDF upgrade
+path, popup-versus-tab, and the missing change-passphrase path.

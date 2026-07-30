@@ -46,10 +46,12 @@ function CredentialRow({
 }) {
   const [status, setStatus] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
-  const [mismatch, setMismatch] = useState<{ page: string; expected: string } | null>(null)
+  // `expected` is null when the credential has no stored site at all, which
+  // needs different words from a genuine mismatch.
+  const [mismatch, setMismatch] = useState<{ page: string; expected: string | null } | null>(null)
   const canAutofill = isExtensionContext()
 
-  const handleAutofill = async (overrideOrigin = false) => {
+  const handleAutofill = async (overrideOrigin?: string) => {
     setStatus('Filling...')
     setMismatch(null)
     const result = await requestAutofill({
@@ -60,19 +62,22 @@ function CredentialRow({
     })
     if (result.ok && result.filled) {
       setStatus('Filled')
-    } else if (result.reason === 'origin-mismatch') {
+    } else if (result.reason === 'origin-mismatch' || result.reason === 'no-stored-origin') {
       // Never fill silently across origins: this is exactly what a look-alike
-      // phishing page is counting on.
+      // phishing page is counting on. A credential with no stored site gets
+      // the same treatment rather than a free pass.
       setStatus(null)
       setMismatch({
         page: result.pageOrigin ?? 'this page',
-        expected: result.expectedOrigin ?? 'the stored site',
+        expected: result.reason === 'origin-mismatch' ? (result.expectedOrigin ?? 'the stored site') : null,
       })
       return
     } else if (result.reason === 'no-password-field') {
       setStatus('No login field found on page')
     } else if (result.reason === 'no-page-tab') {
-      setStatus('Open the login page in a tab, then try again')
+      // Today this is the normal outcome: the extension's own tab is the
+      // active one whenever this button is clicked. See decisions/0009.
+      setStatus('Could not reach the login page — use Copy for now')
     } else if (result.reason === 'not-in-extension') {
       setStatus('Autofill requires the extension context')
     } else {
@@ -84,7 +89,10 @@ function CredentialRow({
   const handleCopy = async () => {
     try {
       await copyWithAutoClear(cred.password)
-      setStatus('Copied (auto-clears in 30s)')
+      // Deliberately not "auto-clears in 30s": the clear needs this tab to be
+      // focused, so if the user is away it happens when they come back. Say
+      // what actually happens rather than promising a stopwatch.
+      setStatus('Copied — cleared 30s after you return here')
     } catch {
       setStatus('Copy failed')
     }
@@ -129,16 +137,24 @@ function CredentialRow({
 
       {mismatch && (
         <div className="space-y-2 rounded-lg border-2 border-brick/60 bg-brick/10 p-2 text-xs">
-          <p>
-            This page is <strong className="break-all">{mismatch.page}</strong>, but this password
-            is for <strong className="break-all">{mismatch.expected}</strong>. If you did not expect
-            that, the page may be impersonating the real site.
-          </p>
+          {mismatch.expected ? (
+            <p>
+              This page is <strong className="break-all">{mismatch.page}</strong>, but this password
+              is for <strong className="break-all">{mismatch.expected}</strong>. If you did not
+              expect that, the page may be impersonating the real site.
+            </p>
+          ) : (
+            <p>
+              This password has no site saved against it, so there is nothing to check{' '}
+              <strong className="break-all">{mismatch.page}</strong> against. Fill it only if this is
+              the page you meant — adding the address to the entry lets it be checked next time.
+            </p>
+          )}
           <div className="flex gap-3">
             <button
               type="button"
               className={`${ROW_ACTION} font-semibold text-brick`}
-              onClick={() => void handleAutofill(true)}
+              onClick={() => void handleAutofill(mismatch.page)}
             >
               Fill anyway
             </button>

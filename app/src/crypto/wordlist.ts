@@ -20,15 +20,50 @@ export function generatePassphrase(count: number = DEFAULT_WORDS): string[] {
   return Array.from({ length: count }, () => randomWord())
 }
 
-/** Uniform replacement keeps per-word re-rolls entropy-neutral. */
+/** Replace one word with a fresh uniform draw. See `rerollCostBits`. */
 export function rerollWord(words: string[], index: number): string[] {
   const next = [...words]
   next[index] = randomWord()
   return next
 }
 
-export function phraseEntropyBits(wordCount: number): number {
-  return Math.round(wordCount * BITS_PER_WORD * 10) / 10
+/**
+ * The most entropy a user may spend re-rolling, in bits.
+ *
+ * Re-rolling is NOT free, which the earlier "uniform replacement keeps
+ * re-rolls entropy-neutral" comment got wrong. Each draw is uniform, but the
+ * user keeps only the draw they like, and that is rejection sampling with a
+ * predicate — memorability, familiarity, imageability — that an attacker can
+ * buy off the shelf, since this wordlist was itself built from published
+ * concreteness norms. Keeping roughly one word in four cuts the effective
+ * alphabet to a quarter and a six-word phrase to about 55 bits: below the
+ * five-word setting that was withdrawn for being too weak.
+ *
+ * Six bits still allows every word in a six-word phrase to be re-rolled once,
+ * or one stubborn word to be re-rolled 63 times, and leaves a floor of about
+ * 60.8 bits.
+ *
+ * This is a guardrail, not a boundary: the budget lives in component state, so
+ * reloading mid-onboarding starts a fresh phrase with a fresh budget. That is
+ * accepted. What it defends against is the user who re-rolls a dozen times
+ * without realising it costs anything — and, just as much, a meter that used
+ * to keep reporting 66.8 bits while they did it.
+ */
+export const MAX_REROLL_BITS = 6
+
+/**
+ * What has been spent choosing among alternatives. Picking one of k+1 offered
+ * words costs log2(k+1) bits, and regenerating the whole phrase is charged the
+ * same way — otherwise flipping the word count back and forth would be a free
+ * re-roll.
+ */
+export function rerollCostBits(perWordRerolls: readonly number[], phraseRegenerations: number): number {
+  const perWord = perWordRerolls.reduce((sum, k) => sum + Math.log2(k + 1), 0)
+  return perWord + Math.log2(phraseRegenerations + 1)
+}
+
+export function phraseEntropyBits(wordCount: number, spentBits = 0): number {
+  return Math.round((wordCount * BITS_PER_WORD - spentBits) * 10) / 10
 }
 
 /** Canonical form used for key derivation: lowercase, single-spaced. */

@@ -1,19 +1,28 @@
 # 0009 — Vault format hardening, and popup vs tab for autofill
 
-**Status:** OPEN — needs James's call on three things
+**Status:** OPEN — needs James's call on four things. Item 3 is no longer a
+suspicion: autofill has been tested in a real browser and does not work at all.
 
 Follows the adversarial review in `0008`. Everything in that review that could
 be fixed without changing the vault format or the product's shape has been
-fixed and committed. These three cannot.
+fixed and committed. These cannot.
 
 ## 1. Pad the ciphertext (and bind the header)
 
 AES-GCM ciphertext is exactly as long as its plaintext, and the plaintext is
 unpadded JSON. So the stored length — visible without any key, in IndexedDB or
-in a backup file — leaks roughly how many credentials exist, and, more
-seriously, roughly how many words are in the master passphrase. Confirming a
-shorter phrase would cut an attacker's search cost by a large factor. Two
-snapshots taken over time also reveal the length of an individual password.
+in a backup file — leaks roughly how many credentials exist.
+
+The word-count argument for padding turns out to be the weaker one, and the
+original wording here overstated it. Measured, the difference between a six-,
+seven- and eight-word phrase is about a hundred bytes, which the user's own
+imagery text swamps; and an attacker searches the six-word tier first anyway,
+so knowing the count saves them at most a bit and a half of triage.
+
+**The real argument is the second one:** two snapshots plus the plaintext
+`updatedAt` reveal the length of an individual newly-added site password. That
+is directly search-space-reducing against that one site, and it needs only a
+backup taken twice.
 
 Separately, the stored header (salt, KDF params, version) is not authenticated.
 Tampering with it only causes derivation to fail closed, so this is corruption,
@@ -42,13 +51,36 @@ spinner, and costs an attacker about 4x more).
 **The decision:** is the slower unlock acceptable? And is an automatic silent
 re-encrypt on unlock acceptable, or should it be offered explicitly?
 
-## 3. Popup versus tab (this one may be blocking autofill entirely)
+## 3. Popup versus tab — CONFIRMED IN A REAL BROWSER: autofill does not work
 
-Clicking the toolbar icon opens the app in a full browser tab. That means when
-the user clicks Autofill, the active tab is the extension's own page, not the
-login page they want filled — so the fill has probably been going nowhere.
-The `activeTab` permission is also spent on whichever site happened to be open
-when the icon was clicked, which is not the tab anyone wants.
+This was written as a suspicion. It has now been tested, and it is worse than
+suspected: **autofill has never worked, at all.** Not "sometimes fills the
+wrong place" — it cannot fill anything.
+
+The test is `app/scripts/autofill-check.mjs` (`npm run build && npm run
+autofill`). It loads the real packed extension into a real browser, serves a
+real login page, and clicks the real button. Every fill attempt fails with
+*"Cannot access contents of the page. Extension manifest must request
+permission to access the respective host."*
+
+The reason is the permission model, not the code. `activeTab` is granted for
+whichever tab was active when the toolbar icon was clicked — and the very next
+thing the icon does is open the app in a **new** tab, which then becomes the
+active one. So the grant sits on the page the user was looking at, while the
+fill request targets the extension's own tab, which can never be scripted.
+There is no ordering of clicks that fixes this from a full tab.
+
+The same run proves the rest of the fill path is sound. Re-run with a host
+permission added — a diagnostic, not something the extension ships — and 12 of
+13 checks pass: the origin check refuses a look-alike page, names both origins,
+honours an explicit approval and refuses a stale one, skips hidden, tiny,
+transparent, off-screen, disabled and covered fields, puts the username in the
+login form rather than the newsletter box, and does not stack listeners across
+repeated fills. Only the "from the extension tab" case still fails, which is
+this item.
+
+So the decision below is no longer a matter of taste. Until it is answered,
+every password goes via the clipboard.
 
 The standard fix is a small popup for the "unlock and fill" case, keeping the
 full tab for the memory house. That aligns the permission grant, the active
@@ -63,11 +95,35 @@ so the extension can address a chosen tab directly. That is a much broader
 permission and works against the local-only, minimal-permission posture — not
 recommended.
 
-**The decision:** build the popup, or leave autofill as a tab-only feature and
-lean on the clipboard fallback?
+**A third option, now that the cause is known:** keep the full tab, but capture
+the target tab from `chrome.action.onClicked`'s `tab` argument at the moment of
+the click, remember it, and fill *that* tab. It needs no new permission and no
+new UI. It is less obvious to the user than a popup — they click the icon on
+the login page, walk their house, and the fill lands back where they came from
+— but it is much the smaller change.
+
+**The decision:** build the popup, do the remembered-tab version, or accept
+that autofill does not work and make the clipboard the only path (in which
+case the Autofill button should go, rather than sitting there failing).
+
+## 4. There is no way to change the master passphrase
+
+Related, and found while reviewing the above. Doc `0008` says that if the vault
+is ever open while the browser is compromised, the master phrase is burned
+permanently and the only remedy is "creating a new vault with a new phrase".
+That remedy is not implementable today: there is no change-passphrase path, and
+the only route to a new vault is Delete, which erases every credential with it.
+A user who suspected a compromise would have to transcribe every password by
+hand first.
+
+The fix is the same code as item 2 — at unlock the plaintext is already in
+hand, so a fresh salt, current parameters, and a re-encrypt is the whole job.
+
+**Recommended default:** implement "change master passphrase" together with the
+KDF upgrade path, since they are one code path.
 
 ## Acceptance criteria for resuming
 
-Any one of the three unblocks work on its own. Item 3 is worth answering first,
-because if autofill is broken in practice then it is the difference between a
-headline feature working and not.
+Any one of the four unblocks work on its own. Item 3 is the one to answer
+first: it is the difference between the headline feature working and not, and
+it is confirmed broken rather than suspected.

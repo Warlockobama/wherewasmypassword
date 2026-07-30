@@ -10,7 +10,9 @@ import LockScreen from './vault/LockScreen.tsx'
 import UnlockedHome from './vault/UnlockedHome.tsx'
 import type { Association, VaultData } from './crypto/vault.ts'
 import { randomInt } from './crypto/random.ts'
+import { clearClipboardOnLock } from './credentials/clipboard.ts'
 import {
+  freshPracticeMeta,
   loadPracticeMeta,
   loadVault,
   savePracticeMeta,
@@ -36,6 +38,14 @@ type Phase =
 const AUTO_LOCK_MS = 5 * 60 * 1000
 const HIDDEN_LOCK_MS = 60 * 1000
 const MAX_SESSION_MS = 30 * 60 * 1000
+
+/**
+ * Locking is app-wide, not tab-wide. Nothing stops a second copy of the UI
+ * being open, and each one holds its own key on its own timers, so "Lock now"
+ * in one has to reach the others.
+ */
+const lockChannel =
+  typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel('wwmp-lock')
 
 function shuffled(n: number): number[] {
   const order = Array.from({ length: n }, (_, i) => i)
@@ -73,12 +83,18 @@ export default function App() {
     })()
   }, [])
 
-  const lock = () => {
+  const lock = (broadcast = true) => {
     // Drop the key and plaintext; GC does the rest. Best effort in JS.
     setUnlocked((u) => {
       u?.rawKey.fill(0)
       return null
     })
+    // A copied password outlives the key otherwise: the pending clear holds
+    // the plaintext until it fires. Take it off the clipboard now instead.
+    void clearClipboardOnLock()
+    // Every other open copy of the UI has its own key in its own memory, on
+    // its own timers. Locking one has to mean locking all of them.
+    if (broadcast) lockChannel?.postMessage('lock')
     setPhase('locked')
   }
 
@@ -87,43 +103,86 @@ export default function App() {
   useEffect(() => {
     if (phase !== 'unlocked') return
     let hiddenTimer: number | undefined
+
+    // Deadlines in wall-clock time, not timer durations. A suspended machine
+    // does not run timers but time still passes, so a lid closed two minutes
+    // into a session and opened eight hours later must find the vault locked,
+    // not with 28 minutes still on its "absolute" cap.
+    const startedAt = Date.now()
+    let idleSince = startedAt
+    let hiddenSince: number | null = null
+
+    const expired = () =>
+      Date.now() - startedAt >= MAX_SESSION_MS ||
+      Date.now() - idleSince >= AUTO_LOCK_MS ||
+      (hiddenSince !== null && Date.now() - hiddenSince >= HIDDEN_LOCK_MS)
+
+    const check = () => {
+      if (expired()) lock()
+    }
+
     // Only a real human keeps the vault open. Synthetic events are ignored, so
     // a script on the page can't hold the session — and the key — open forever
     // with a dispatched keydown every few minutes.
     const arm = (event?: Event) => {
       if (event && !event.isTrusted) return
+      idleSince = Date.now()
       window.clearTimeout(lockTimer.current)
-      lockTimer.current = window.setTimeout(lock, AUTO_LOCK_MS)
+      lockTimer.current = window.setTimeout(check, AUTO_LOCK_MS)
     }
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') {
-        hiddenTimer = window.setTimeout(lock, HIDDEN_LOCK_MS)
+        hiddenSince = Date.now()
+        hiddenTimer = window.setTimeout(check, HIDDEN_LOCK_MS)
       } else {
         window.clearTimeout(hiddenTimer)
+        // Judge the hidden deadline BEFORE forgetting when we went hidden. A
+        // machine suspended while the tab was hidden never ran that timer, so
+        // clearing `hiddenSince` first would quietly forgive the whole absence
+        // — which is exactly the case this is here to catch.
+        if (expired()) {
+          lock()
+          return
+        }
+        hiddenSince = null
       }
     }
     arm()
     // A hard ceiling no amount of activity can extend: even a genuinely busy
     // session should not keep the key in memory all day.
-    const sessionCap = window.setTimeout(lock, MAX_SESSION_MS)
+    const sessionCap = window.setTimeout(check, MAX_SESSION_MS)
     const events = ['pointerdown', 'keydown'] as const
     events.forEach((e) => window.addEventListener(e, arm))
     document.addEventListener('visibilitychange', onVisibility)
-    // Leaving the page is as good a reason to drop the key as any.
-    window.addEventListener('pagehide', lock)
+    window.addEventListener('focus', check)
+    // Leaving the page is as good a reason to drop the key as any — but only
+    // this page's key. Closing one tab should not lock a vault the user is
+    // actively working in somewhere else.
+    const onPageHide = () => lock(false)
+    window.addEventListener('pagehide', onPageHide)
+    const onRemoteLock = (event: MessageEvent) => {
+      if (event.data === 'lock') lock(false)
+    }
+    lockChannel?.addEventListener('message', onRemoteLock)
     return () => {
       window.clearTimeout(lockTimer.current)
       window.clearTimeout(hiddenTimer)
       window.clearTimeout(sessionCap)
       events.forEach((e) => window.removeEventListener(e, arm))
       document.removeEventListener('visibilitychange', onVisibility)
-      window.removeEventListener('pagehide', lock)
+      window.removeEventListener('focus', check)
+      window.removeEventListener('pagehide', onPageHide)
+      lockChannel?.removeEventListener('message', onRemoteLock)
     }
   }, [phase])
 
   const recordPractice = async () => {
-    const current = meta ?? { createdAt: Date.now(), practicedAt: [] }
-    const next = { ...current, practicedAt: [...current.practicedAt, Date.now()] }
+    const current = meta ?? freshPracticeMeta(Date.now())
+    const next = {
+      ...current,
+      practiceCount: current.practiceCount + 1,
+      lastPracticedAt: Date.now(),
+    }
     setMeta(next)
     await savePracticeMeta(next)
   }
@@ -137,7 +196,7 @@ export default function App() {
           onComplete={() => setPhase('demo')}
           onRestored={(restoredVault) => {
             setStored(restoredVault)
-            setMeta({ createdAt: restoredVault.createdAt, practicedAt: [] })
+            setMeta(freshPracticeMeta(restoredVault.createdAt))
             setPhase('locked')
           }}
         />
@@ -227,7 +286,7 @@ export default function App() {
             setWords([])
             setAssociations([])
             setStored(storedVault)
-            setMeta({ createdAt: data.createdAt, practicedAt: [] })
+            setMeta(freshPracticeMeta(data.createdAt))
             setUnlocked({ rawKey, data })
             setPhase('unlocked')
           }}
@@ -237,7 +296,7 @@ export default function App() {
       return stored ? (
         <LockScreen
           stored={stored}
-          practiceDue={meta ? isPracticeDue(meta.createdAt, meta.practicedAt) : false}
+          practiceDue={meta ? isPracticeDue(meta.createdAt, meta) : false}
           onUnlock={(rawKey, data) => {
             void recordPractice()
             setUnlocked({ rawKey, data })
@@ -245,7 +304,7 @@ export default function App() {
           }}
           onRestored={(restoredVault) => {
             setStored(restoredVault)
-            setMeta({ createdAt: restoredVault.createdAt, practicedAt: [] })
+            setMeta(freshPracticeMeta(restoredVault.createdAt))
           }}
         />
       ) : null
@@ -255,7 +314,7 @@ export default function App() {
           data={unlocked.data}
           stored={stored}
           rawKey={unlocked.rawKey}
-          daysUntilPractice={meta ? daysUntilPractice(meta.createdAt, meta.practicedAt) : 0}
+          daysUntilPractice={meta ? daysUntilPractice(meta.createdAt, meta) : 0}
           onLock={lock}
           onDeleted={() => {
             // Same key hygiene as lock(): dropping the reference is not enough.

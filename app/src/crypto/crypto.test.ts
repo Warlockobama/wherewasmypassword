@@ -3,12 +3,15 @@ import { EFF_WORDLIST } from './eff-wordlist.ts'
 import { IMAGEABLE_WORDLIST } from './imageable-wordlist.ts'
 import { randomInt } from './random.ts'
 import {
+  BITS_PER_WORD,
+  MAX_REROLL_BITS,
   generatePassphrase,
   normalizePassphrase,
   phraseEntropyBits,
+  rerollCostBits,
   rerollWord,
 } from './wordlist.ts'
-import { deriveKey, type KdfParams } from './kdf.ts'
+import { DEFAULT_KDF_PARAMS, deriveKey, kdfParamsAreSupported, type KdfParams } from './kdf.ts'
 import {
   decryptVault,
   encryptVault,
@@ -18,7 +21,7 @@ import {
   type VaultData,
 } from './vault.ts'
 import { parseBackup, serializeBackup } from '../storage/backup.ts'
-import type { StoredVault } from '../storage/db.ts'
+import { migratePracticeMeta, type StoredVault } from '../storage/db.ts'
 import { isPracticeDue, nextPracticeAt } from '../srs/schedule.ts'
 
 // Small params keep the suite fast; one test exercises real derivation determinism.
@@ -82,6 +85,31 @@ describe('wordlist', () => {
     expect(phraseEntropyBits(6)).toBeCloseTo(6 * Math.log2(IMAGEABLE_WORDLIST.length), 1)
   })
 
+  it('charges re-rolls against the entropy it reports', () => {
+    // Keeping one of two offered words is one bit, one of four is two. The
+    // meter used to ignore this entirely and claim 66.8 bits however long the
+    // user hunted for words they liked.
+    expect(rerollCostBits([0, 0, 0, 0, 0, 0], 0)).toBe(0)
+    expect(rerollCostBits([1, 0, 0, 0, 0, 0], 0)).toBeCloseTo(1, 6)
+    expect(rerollCostBits([3, 0, 0, 0, 0, 0], 0)).toBeCloseTo(2, 6)
+    expect(rerollCostBits([1, 1, 0, 0, 0, 0], 0)).toBeCloseTo(2, 6)
+    // Regenerating the whole phrase is charged too, so flipping the word count
+    // back and forth is not a free re-roll.
+    expect(rerollCostBits([0, 0, 0, 0, 0, 0], 1)).toBeCloseTo(1, 6)
+    expect(phraseEntropyBits(6, rerollCostBits([1, 1, 0, 0, 0, 0], 0))).toBeCloseTo(
+      6 * BITS_PER_WORD - 2,
+      1,
+    )
+  })
+
+  it('cannot be re-rolled below the strength of the withdrawn five-word option', () => {
+    // Five words was 55.7 bits and was withdrawn. The re-roll budget has to
+    // leave a floor above that, or filtering re-creates the setting by hand.
+    const floor = 6 * BITS_PER_WORD - MAX_REROLL_BITS
+    expect(floor).toBeGreaterThan(5 * BITS_PER_WORD)
+    expect(floor).toBeGreaterThan(60)
+  })
+
   it('normalizes case and whitespace', () => {
     expect(normalizePassphrase('  Alpha   BETA\tgamma ')).toBe('alpha beta gamma')
   })
@@ -121,6 +149,29 @@ describe('kdf', () => {
     const a = await deriveKey('correct horse battery staple', salt, TEST_KDF)
     const b = await deriveKey('correct horse battery staple', otherSalt, TEST_KDF)
     expect(toBase64(a)).not.toBe(toBase64(b))
+  })
+
+  it('refuses absurd parameters wherever they came from, not just from backups', async () => {
+    // The stored vault record is a file on disk. Anyone who can rewrite it
+    // could ask for two terabytes of Argon2id memory on every unlock and wedge
+    // the vault for good — and, the header being unauthenticated, the user
+    // would be told their passphrase was wrong. The backup path checked this;
+    // the unlock path did not, so the check now lives in `deriveKey` itself.
+    await expect(deriveKey('phrase', salt, { ...TEST_KDF, memoryKiB: 2 ** 31 })).rejects.toThrow(
+      /key-derivation/,
+    )
+    await expect(deriveKey('phrase', salt, { ...TEST_KDF, iterations: 0 })).rejects.toThrow()
+    await expect(
+      deriveKey('phrase', salt, { ...TEST_KDF, algorithm: 'md5' } as unknown as KdfParams),
+    ).rejects.toThrow()
+  })
+
+  it('accepts the shipped defaults and the whole documented range', () => {
+    expect(kdfParamsAreSupported(DEFAULT_KDF_PARAMS)).toBe(true)
+    // Room to raise the defaults later without a code change.
+    expect(kdfParamsAreSupported({ ...DEFAULT_KDF_PARAMS, memoryKiB: 1024 * 1024 })).toBe(true)
+    expect(kdfParamsAreSupported({ ...DEFAULT_KDF_PARAMS, memoryKiB: 4 * 1024 })).toBe(false)
+    expect(kdfParamsAreSupported(undefined)).toBe(false)
   })
 })
 
@@ -167,12 +218,40 @@ describe('vault encryption', () => {
     expect(fromBase64(toBase64(bytes))).toEqual(bytes)
   })
 
-  it('plaintext words never appear in the encrypted blob', async () => {
-    const blob = await encryptVault(key, sampleVault)
-    const raw = new TextDecoder('latin1').decode(blob.ciphertext)
-    for (const word of sampleVault.words) {
-      expect(raw).not.toContain(word)
+  it('encrypting the same vault twice gives unrelated bytes', async () => {
+    // Substring-searching the ciphertext for the plaintext words would pass for
+    // ROT13 or for XOR with a constant, so it proves nothing. What actually
+    // distinguishes real encryption here is that two encryptions of identical
+    // input share no structure, and that the output is not the plaintext length
+    // plus a fixed constant in some recognisable encoding.
+    const a = await encryptVault(key, sampleVault)
+    const b = await encryptVault(key, sampleVault)
+    expect(toBase64(a.ciphertext)).not.toBe(toBase64(b.ciphertext))
+    let agreeing = 0
+    for (let i = 0; i < a.ciphertext.length; i++) {
+      if (a.ciphertext[i] === b.ciphertext[i]) agreeing++
     }
+    // Two independent random streams agree on about 1 byte in 256.
+    expect(agreeing).toBeLessThan(a.ciphertext.length / 32)
+  })
+
+  it('reports a damaged vault as damaged rather than as a wrong passphrase', async () => {
+    // Authentic plaintext that is not a vault means corruption, and the user
+    // should not be told to go and re-walk their memory house over it.
+    const key2 = new Uint8Array(32).fill(9)
+    const iv = new Uint8Array(12).fill(3)
+    const subtle = await crypto.subtle.importKey('raw', key2, 'AES-GCM', false, ['encrypt'])
+    const junk = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv },
+      subtle,
+      new TextEncoder().encode('{ this is not json'),
+    )
+    await expect(
+      decryptVault(key2, { iv, ciphertext: new Uint8Array(junk) }),
+    ).rejects.toThrow(/damaged/i)
+    await expect(
+      decryptVault(key2, { iv, ciphertext: new Uint8Array(junk) }),
+    ).rejects.not.toBeInstanceOf(WrongPassphraseError)
   })
 })
 
@@ -203,21 +282,46 @@ describe('backup files', () => {
 describe('practice schedule', () => {
   const DAY = 24 * 60 * 60 * 1000
   const t0 = 1700000000000
+  const never = { practiceCount: 0, lastPracticedAt: null }
 
   it('walks the expanding ladder 1, 2, 4 days…', () => {
-    expect(nextPracticeAt(t0, [])).toBe(t0 + 1 * DAY)
-    expect(nextPracticeAt(t0, [t0 + DAY])).toBe(t0 + DAY + 2 * DAY)
-    expect(nextPracticeAt(t0, [t0 + DAY, t0 + 3 * DAY])).toBe(t0 + 3 * DAY + 4 * DAY)
+    expect(nextPracticeAt(t0, never)).toBe(t0 + 1 * DAY)
+    expect(nextPracticeAt(t0, { practiceCount: 1, lastPracticedAt: t0 + DAY })).toBe(t0 + DAY + 2 * DAY)
+    expect(nextPracticeAt(t0, { practiceCount: 2, lastPracticedAt: t0 + 3 * DAY })).toBe(
+      t0 + 3 * DAY + 4 * DAY,
+    )
   })
 
   it('settles at 30 days after the ladder', () => {
-    const log = [1, 2, 3, 4, 5, 6, 7].map((i) => t0 + i * DAY)
-    expect(nextPracticeAt(t0, log)).toBe(t0 + 7 * DAY + 30 * DAY)
+    expect(nextPracticeAt(t0, { practiceCount: 7, lastPracticedAt: t0 + 7 * DAY })).toBe(
+      t0 + 7 * DAY + 30 * DAY,
+    )
   })
 
   it('reports due status', () => {
-    expect(isPracticeDue(t0, [], t0 + 2 * DAY)).toBe(true)
-    expect(isPracticeDue(t0, [], t0 + DAY / 2)).toBe(false)
+    expect(isPracticeDue(t0, never, t0 + 2 * DAY)).toBe(true)
+    expect(isPracticeDue(t0, never, t0 + DAY / 2)).toBe(false)
+  })
+
+  it('migrates a legacy unlock timeline to a count and a last date', () => {
+    // The timeline was a plaintext activity log of the user's whole life with
+    // the app; the schedule only ever read its length and its maximum.
+    const legacy = { createdAt: t0, practicedAt: [t0 + DAY, t0 + 3 * DAY, t0 + 2 * DAY] }
+    const migrated = migratePracticeMeta(legacy)
+    expect(migrated).toEqual({ createdAt: t0, practiceCount: 3, lastPracticedAt: t0 + 3 * DAY })
+    expect('practicedAt' in migrated).toBe(false)
+    // Same schedule before and after, which is what makes it safe to drop.
+    expect(nextPracticeAt(t0, migrated)).toBe(t0 + 3 * DAY + 7 * DAY)
+  })
+
+  it('leaves an already-migrated record alone, and copes with no history', () => {
+    const current = { createdAt: t0, practiceCount: 2, lastPracticedAt: t0 + DAY }
+    expect(migratePracticeMeta(current)).toBe(current)
+    expect(migratePracticeMeta({ createdAt: t0 })).toEqual({
+      createdAt: t0,
+      practiceCount: 0,
+      lastPracticedAt: null,
+    })
   })
 })
 
@@ -247,5 +351,34 @@ describe('backup files from untrusted sources', () => {
     expect(() =>
       parseBackup(wrap({ ...goodVault, kdfParams: { ...TEST_KDF, algorithm: 'md5' } })),
     ).toThrow()
+  })
+
+  it('rejects fields of the wrong type, not just missing ones', () => {
+    // `salt: {}` and `iv: 7` are truthy, so a presence check waved them
+    // through and they only failed much later, inside the unlock path.
+    expect(() => parseBackup(wrap({ ...goodVault, salt: {} }))).toThrow(/incomplete/i)
+    expect(() => parseBackup(wrap({ ...goodVault, iv: 7 }))).toThrow(/incomplete/i)
+    expect(() => parseBackup(wrap({ ...goodVault, ciphertext: null }))).toThrow(/incomplete/i)
+    // Nor a ciphertext large enough to fill the origin's storage quota.
+    expect(() => parseBackup(wrap({ ...goodVault, ciphertext: 'A'.repeat(9 * 1024 * 1024) }))).toThrow(
+      /incomplete/i,
+    )
+  })
+
+  it('keeps only the fields it understands', () => {
+    const restored = parseBackup(
+      wrap({ ...goodVault, smuggled: 'anything', __proto__: { polluted: true } }),
+    )
+    expect('smuggled' in restored).toBe(false)
+    expect(Object.keys(restored).sort()).toEqual(
+      ['ciphertext', 'createdAt', 'iv', 'kdfParams', 'salt', 'updatedAt', 'version'].sort(),
+    )
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+  })
+
+  it('substitutes a sane timestamp rather than trusting one from the file', () => {
+    const restored = parseBackup(wrap({ ...goodVault, createdAt: 'yesterday', updatedAt: NaN }))
+    expect(Number.isFinite(restored.createdAt)).toBe(true)
+    expect(Number.isFinite(restored.updatedAt)).toBe(true)
   })
 })

@@ -51,9 +51,19 @@ export async function editCredential(
   stored: StoredVault,
   patch: CredentialPatch,
 ): Promise<[VaultData, StoredVault]> {
-  const entries = data.entries.map((c) =>
-    c.id === patch.id ? { ...c, ...patch, updatedAt: Date.now() } : c,
-  )
+  // Only the editable fields are copied across. Spreading the whole patch let
+  // anything that happened to be on it — `id`, `createdAt` — overwrite the
+  // credential's identity, which the type discouraged but did not prevent.
+  const entries = data.entries.map((c) => {
+    if (c.id !== patch.id) return c
+    const next: Credential = { ...c, updatedAt: Date.now() }
+    if (patch.label !== undefined) next.label = patch.label
+    if (patch.url !== undefined) next.url = patch.url
+    if (patch.username !== undefined) next.username = patch.username
+    if (patch.password !== undefined) next.password = patch.password
+    if (patch.notes !== undefined) next.notes = patch.notes
+    return next
+  })
   const nextData: VaultData = { ...data, entries }
   const nextStored = await persistVault(rawKey, nextData, stored)
   return [nextData, nextStored]

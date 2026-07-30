@@ -27,7 +27,10 @@ you can't hide something in a drawer and open it later. The illustrated house ca
   `crypto.getRandomValues` from the EFF large wordlist filtered to **picturable words
   only** (concreteness ≥ 4.0 in the Brysbaert et al. norms, 2,255 words) — the method of
   loci can't hang "dispersed" on a mailbox, but it can hang a zeppelin. Entropy is
-  computed from the filtered list's true size; per-word re-roll.
+  computed from the filtered list's true size. Words can be re-rolled, but re-rolls are
+  **counted and charged**: keeping only the draw you liked is a choice you made rather
+  than the dice, so the meter falls as you spend and a six-bit budget holds the floor at
+  ~60.8 bits.
 - **Placement journey**: room by room, craft a vivid image for each word, place it, and
   watch the compartment close over it.
 - **Training gauntlet**: forward walk → backward walk → random spot-checks (all requiring
@@ -45,9 +48,19 @@ you can't hide something in a drawer and open it later. The illustrated house ca
   encrypted vault afterwards — never in plaintext storage.
 - No server, no analytics, zero network requests; production builds ship a strict CSP
   (`default-src 'self'`; WASM allowed for Argon2id only).
-- Auto-lock after 5 minutes idle, or 60 seconds after the tab is hidden.
+- Auto-lock after 5 minutes idle, 60 seconds after the tab is hidden, and a 30-minute
+  ceiling no activity can extend. Deadlines are wall-clock, so a suspended laptop wakes
+  locked. Locking one tab locks every open copy.
 - If you forget the phrase, nothing can recover the vault. That's the deal — and the
   whole point of the training.
+
+**Known limitation:** autofill does not currently work. The extension opens its UI in a
+full tab, and the `activeTab` permission is granted to the tab that was active when the
+toolbar icon was clicked — never the tab the fill targets. Confirmed by
+`npm run autofill`, which drives the packed extension in a real browser; see
+`decisions/0009`. Until it is resolved, Copy is the working path. Copy clears the
+clipboard 30 seconds after you return to the extension's tab (the browser will not let a
+background page touch the clipboard) — note your OS may keep its own clipboard history.
 
 ### Develop
 
@@ -55,9 +68,15 @@ you can't hide something in a drawer and open it later. The illustrated house ca
 cd app
 npm install
 npm run dev    # http://localhost:5199
-npm test       # vitest: crypto, backup, schedule suites
+npm test       # vitest: crypto, backup, credential-persistence, schedule suites
 npm run build  # production build in dist/ (web page + extension), CSP injected
+npm run visual # drives the whole onboarding in a real browser, screenshots each screen
+npm run autofill  # loads the packed extension in a real browser and tests the fill path
 ```
+
+`npm run autofill` needs Microsoft Edge: Chrome 137 and later ignore `--load-extension`,
+so on Chrome the extension silently never loads and every check would pass vacuously.
+It currently exits non-zero — see the known limitation above.
 
 ### Install as a browser extension
 

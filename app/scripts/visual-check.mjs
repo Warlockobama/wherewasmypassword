@@ -278,6 +278,37 @@ async function main() {
     await sleep(300)
     await shot('04-phrase-generator')
 
+    // The re-roll budget: choosing among alternatives costs entropy, so the
+    // meter has to fall as re-rolls are spent and the buttons have to stop.
+    // Without this the meter would happily read "~66.8 bits" while the user
+    // hunted through the wordlist for six words they liked.
+    const readBits = () =>
+      evaluate(`(() => {
+        const el = [...document.querySelectorAll('p')].find((n) => /bits of entropy/.test(n.textContent))
+        return el ? Number(el.textContent.match(/~([\\d.]+) bits/)?.[1]) : null
+      })()`)
+    const bitsBefore = await readBits()
+    for (let i = 1; i <= 6; i++) {
+      await evaluate(`(() => {
+        const el = document.querySelector('[aria-label="Re-roll word ${i}"]')
+        if (!el || el.disabled) return false
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
+        return true
+      })()`)
+      await sleep(120)
+    }
+    const bitsAfter = await readBits()
+    const stillOffered = await evaluate(
+      `[...document.querySelectorAll('[aria-label^="Re-roll word"]')].filter((b) => !b.disabled).length`,
+    )
+    console.log(`\nRe-roll budget: ${bitsBefore} bits -> ${bitsAfter} after six re-rolls`)
+    if (!(bitsAfter < bitsBefore - 5)) {
+      problems.push(`six re-rolls only moved the entropy meter ${bitsBefore} -> ${bitsAfter}`)
+    }
+    if (stillOffered !== 0) {
+      problems.push(`${stillOffered} re-roll buttons still enabled after the budget was spent`)
+    }
+
     const words = await evaluate(`[...document.querySelectorAll('span.group')].map(
       (el) => [...el.childNodes].map(n => n.textContent.trim()).filter(t => t && !/^\\d+$/.test(t) && t !== '↻')[0]
     )`)

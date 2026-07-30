@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { parseBackup } from '../storage/backup.ts'
-import { saveVault, type StoredVault } from '../storage/db.ts'
+import { archiveCurrentVault, saveVault, type StoredVault } from '../storage/db.ts'
 import { Button, Panel, Progress, Screen, Title } from '../ui.tsx'
 
 const PAGES: { title: string; body: React.ReactNode }[] = [
@@ -76,6 +76,10 @@ export default function Welcome({
   const restore = async (file: File) => {
     try {
       const restored = parseBackup(await file.text())
+      // Archive unconditionally, exactly as the lock screen's restore does.
+      // Nothing should reach this screen with a vault present, but "should"
+      // is not a reason for the one destructive path to be the unguarded one.
+      await archiveCurrentVault()
       await saveVault(restored)
       onRestored(restored)
     } catch (err) {

@@ -3,7 +3,13 @@ import { DEFAULT_KDF_PARAMS, deriveKey } from '../crypto/kdf.ts'
 import { randomBytes } from '../crypto/random.ts'
 import { encryptVault, toBase64, type Association, type VaultData } from '../crypto/vault.ts'
 import { downloadBackup } from '../storage/backup.ts'
-import { requestPersistence, saveVault, savePracticeMeta, type StoredVault } from '../storage/db.ts'
+import {
+  freshPracticeMeta,
+  requestPersistence,
+  saveVault,
+  savePracticeMeta,
+  type StoredVault,
+} from '../storage/db.ts'
 import { Button, Panel, Screen, Title } from '../ui.tsx'
 
 type Status = 'idle' | 'working' | 'done' | 'error'
@@ -45,7 +51,7 @@ export default function CreateVault({
         updatedAt: now,
       }
       await saveVault(stored)
-      await savePracticeMeta({ createdAt: now, practicedAt: [] })
+      await savePracticeMeta(freshPracticeMeta(now))
       await requestPersistence()
 
       setResult({ rawKey, data, stored })

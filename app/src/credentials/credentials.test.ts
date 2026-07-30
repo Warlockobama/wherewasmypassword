@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { generateSitePassword } from './generate-password.ts'
 import { newCredentialId } from './credential-id.ts'
-import { urlMatches, credentialOrigin } from './match-url.ts'
+import { urlMatches, credentialOrigin, canonicalHost } from './match-url.ts'
 
 describe('generateSitePassword', () => {
   it('produces a string of the requested length', () => {
@@ -73,7 +73,11 @@ describe('credentialOrigin', () => {
     expect(credentialOrigin('https://mail.example.com:8443/x')).toBe('https://mail.example.com:8443')
   })
 
-  it('is empty when there is nothing to compare, so no false match is possible', () => {
+  it('is empty when there is nothing to compare', () => {
+    // NOTE: an empty origin means "unknown", NOT "matches nothing". The
+    // content script treats it as a refusal to fill without an explicit
+    // confirmation — it used to skip the origin check altogether, which made
+    // the URL-less entry the one with no protection at all.
     expect(credentialOrigin('')).toBe('')
     expect(credentialOrigin('   ')).toBe('')
     expect(credentialOrigin('not a url at all')).toBe('')
@@ -83,5 +87,32 @@ describe('credentialOrigin', () => {
     const real = credentialOrigin('https://github.com')
     expect(credentialOrigin('https://github.com.evil.test')).not.toBe(real)
     expect(credentialOrigin('http://github.com')).not.toBe(real)
+  })
+
+  it('folds away a leading www. so the phishing warning stays rare', () => {
+    // A warning that fires every time someone saved `example.com` and logs in
+    // at `www.example.com` is a warning people learn to click through.
+    expect(credentialOrigin('https://www.example.com/login')).toBe('https://example.com')
+    expect(credentialOrigin('www.example.com')).toBe(credentialOrigin('example.com'))
+  })
+
+  it('folds away nothing else — a different subdomain is a different site', () => {
+    const real = credentialOrigin('https://example.com')
+    expect(credentialOrigin('https://accounts.example.com')).not.toBe(real)
+    expect(credentialOrigin('https://wwwexample.com')).not.toBe(real)
+    expect(credentialOrigin('https://www.example.com.evil.test')).not.toBe(real)
+    // The port and scheme stay strict.
+    expect(credentialOrigin('https://www.example.com:8443')).not.toBe(real)
+  })
+})
+
+describe('canonicalHost', () => {
+  it('strips one leading www. label and nothing more', () => {
+    expect(canonicalHost('www.example.com')).toBe('example.com')
+    expect(canonicalHost('WWW.Example.com')).toBe('Example.com')
+    expect(canonicalHost('www.www.example.com')).toBe('www.example.com')
+    expect(canonicalHost('example.com')).toBe('example.com')
+    expect(canonicalHost('wwwexample.com')).toBe('wwwexample.com')
+    expect(canonicalHost('accounts.example.com')).toBe('accounts.example.com')
   })
 })
