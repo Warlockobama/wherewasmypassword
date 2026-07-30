@@ -242,6 +242,7 @@ export default function App() {
         <UnlockedHome
           data={unlocked.data}
           stored={stored}
+          rawKey={unlocked.rawKey}
           daysUntilPractice={meta ? daysUntilPractice(meta.createdAt, meta.practicedAt) : 0}
           onLock={lock}
           onDeleted={() => {
@@ -249,6 +250,10 @@ export default function App() {
             setStored(null)
             setMeta(null)
             setPhase('welcome')
+          }}
+          onVaultChanged={(nextData, nextStored) => {
+            setUnlocked({ rawKey: unlocked.rawKey, data: nextData })
+            setStored(nextStored)
           }}
         />
       ) : null

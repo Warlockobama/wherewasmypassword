@@ -6,24 +6,41 @@ import { LOCI } from '../palace/loci.ts'
 import { downloadBackup } from '../storage/backup.ts'
 import { deleteVault, type StoredVault } from '../storage/db.ts'
 import { Button, Panel, Screen, Title } from '../ui.tsx'
+import type { Credential } from '../credentials/types.ts'
+import CredentialList from '../credentials/CredentialList.tsx'
+import CredentialForm from '../credentials/CredentialForm.tsx'
+import {
+  addCredential,
+  editCredential,
+  deleteCredential,
+} from '../credentials/vault-credentials.ts'
 
 export default function UnlockedHome({
   data,
   stored,
+  rawKey,
   daysUntilPractice,
   onLock,
   onDeleted,
+  onVaultChanged,
 }: {
   data: VaultData
   stored: StoredVault
+  rawKey: Uint8Array
   daysUntilPractice: number
   onLock: () => void
   onDeleted: () => void
+  onVaultChanged: (data: VaultData, stored: StoredVault) => void
 }) {
   const [walking, setWalking] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [step, setStep] = useState(0)
   const [openId, setOpenId] = useState<string | null>(null)
+
+  // Credential management state
+  const [formMode, setFormMode] = useState<'hidden' | 'add' | 'edit'>('hidden')
+  const [editingCred, setEditingCred] = useState<Credential | undefined>(undefined)
+  const [saving, setSaving] = useState(false)
 
   const clues = Object.fromEntries(
     LOCI.map((l) => {
@@ -38,6 +55,42 @@ export default function UnlockedHome({
       ]
     }),
   )
+
+  const handleAddCredential = async (fields: {
+    label: string; url: string; username: string; password: string; notes: string
+  }) => {
+    setSaving(true)
+    try {
+      const [nextData, nextStored] = await addCredential(rawKey, data, stored, fields)
+      onVaultChanged(nextData, nextStored)
+      setFormMode('hidden')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleEditCredential = async (fields: {
+    label: string; url: string; username: string; password: string; notes: string
+  }) => {
+    if (!editingCred) return
+    setSaving(true)
+    try {
+      const [nextData, nextStored] = await editCredential(rawKey, data, stored, {
+        id: editingCred.id,
+        ...fields,
+      })
+      onVaultChanged(nextData, nextStored)
+      setFormMode('hidden')
+      setEditingCred(undefined)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDeleteCredential = async (id: string) => {
+    const [nextData, nextStored] = await deleteCredential(rawKey, data, stored, id)
+    onVaultChanged(nextData, nextStored)
+  }
 
   if (walking) {
     return (
@@ -82,12 +135,56 @@ export default function UnlockedHome({
       </Panel>
 
       <Panel className="w-full space-y-3">
-        <h2 className="font-display text-lg text-dusk">Passwords</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="font-display text-lg text-dusk">Passwords</h2>
+          {formMode === 'hidden' && (
+            <Button
+              variant="secondary"
+              className="!px-3 !py-1 !text-sm"
+              onClick={() => {
+                setEditingCred(undefined)
+                setFormMode('add')
+              }}
+            >
+              + Add
+            </Button>
+          )}
+        </div>
         <p className="text-sm text-dusk/80">
-          Site credentials are coming in v2 — random per-site passwords stored under this same
-          encryption, so this phrase stays the only one you ever memorize.
+          Autofill injects credentials directly into the login page — no clipboard exposure.
+          Use Copy as a fallback; it auto-clears after 30 seconds.
         </p>
+        <CredentialList
+          credentials={data.entries}
+          onEdit={(cred) => {
+            setEditingCred(cred)
+            setFormMode('edit')
+          }}
+          onDelete={(id) => void handleDeleteCredential(id)}
+        />
       </Panel>
+
+      {formMode === 'add' && (
+        <CredentialForm
+          onSave={(f) => void handleAddCredential(f)}
+          onCancel={() => setFormMode('hidden')}
+        />
+      )}
+
+      {formMode === 'edit' && editingCred && (
+        <CredentialForm
+          initial={editingCred}
+          onSave={(f) => void handleEditCredential(f)}
+          onCancel={() => {
+            setFormMode('hidden')
+            setEditingCred(undefined)
+          }}
+        />
+      )}
+
+      {saving && (
+        <p className="text-sm text-dusk/60">Encrypting and saving...</p>
+      )}
 
       <Panel className="w-full space-y-3">
         <h2 className="font-display text-lg text-dusk">Housekeeping</h2>

@@ -1,4 +1,5 @@
 import { randomBytes } from './random.ts'
+import type { Credential } from '../credentials/types.ts'
 
 /** One word placed at one locus, with the user's vivid-imagery text. */
 export interface Association {
@@ -12,8 +13,8 @@ export interface VaultData {
   words: string[]
   associations: Association[]
   createdAt: number
-  /** v2: site credential entries live here, under the same encryption. */
-  entries: unknown[]
+  /** Site credentials, encrypted under the same master key. */
+  entries: Credential[]
 }
 
 export class WrongPassphraseError extends Error {
