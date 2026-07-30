@@ -107,9 +107,10 @@ export async function loadPracticeMeta(): Promise<PracticeMeta | undefined> {
 }
 
 /**
- * Collapse a legacy timestamp list down to a count and a last date. The
- * timeline is discarded on the next save, which is the point: the fix is only
- * worth anything if existing records stop carrying it too.
+ * Collapse a legacy timestamp list down to a count and a last date, returning
+ * the record unchanged if it has already been collapsed. The caller rewrites
+ * the store when it changes, so the timeline leaves disk on the next load
+ * rather than lingering until the next practice unlock.
  */
 export function migratePracticeMeta(stored: PracticeMeta | LegacyPracticeMeta): PracticeMeta {
   if ('practiceCount' in stored && typeof stored.practiceCount === 'number') {
