@@ -130,6 +130,14 @@ describe('vault encryption', () => {
     expect(decrypted).toEqual(sampleVault)
   })
 
+  it('backfills entries when decrypting a pre-v2 vault that lacks the field', async () => {
+    const { entries: _omitted, ...legacyVault } = sampleVault
+    const blob = await encryptVault(key, legacyVault as VaultData)
+    const decrypted = await decryptVault(key, blob)
+    expect(decrypted.entries).toEqual([])
+    expect(decrypted.words).toEqual(sampleVault.words)
+  })
+
   it('rejects the wrong key with WrongPassphraseError', async () => {
     const blob = await encryptVault(key, sampleVault)
     await expect(decryptVault(wrongKey, blob)).rejects.toBeInstanceOf(WrongPassphraseError)

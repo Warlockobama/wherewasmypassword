@@ -1,6 +1,6 @@
 # 0006 — Mobile version: scope and approach
 
-**Status:** OPEN — awaiting James's direction on platform and packaging
+**Status:** RESOLVED (user call, 2026-07-30) — see the resolution at the bottom.
 
 ## Context
 
@@ -87,3 +87,13 @@ if native UX parity becomes a hard requirement.
 Any subset of decisions 1-4 unblocks meaningful work. The PWA path
 (option A) can start immediately with zero decisions if James is fine
 with the recommended default.
+
+## UPDATE 2026-07-30 (guidance via exec assistant, not yet a ruling)
+
+1. **Adopt the recommended PWA path as the starting approach**: James said "That seems reasonable" in response to the PWA default. Proceed with a mobile installable web app experience (manifest, service worker, offline support) and rely on copy-to-clipboard with auto-clear instead of system-wide autofill. Do not pursue a native wrapper or React Native rewrite at this stage.
+2. **Clarify remaining choices before finalizing scope**: Platform priority (iOS-first, Android-first, or both), biometric convenience unlock, and viewer-only versus full-featured scope are still open. Bring back a short proposal assuming the PWA path with a recommended platform rollout and a minimal viable scope, and note what would change if a native wrapper is later required.
+
+## RESOLUTION (user call, 2026-07-30 — via exec assistant)
+
+1. **Defer a mobile app and focus on the extension**: James said "maybe we should focus on the extension itself." Treat mobile work as out of scope for now. Do not build a PWA, Capacitor wrapper, or React Native version at this stage.
+2. **Revisit later when priorities or budget change**: When a mobile experience becomes a priority, bring back a brief proposal comparing the PWA first approach versus a native wrapper, including distribution costs and maintenance overhead.

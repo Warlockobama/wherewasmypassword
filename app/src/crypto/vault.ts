@@ -62,7 +62,10 @@ export async function decryptVault(rawKey: Uint8Array, blob: EncryptedBlob): Pro
   } catch {
     throw new WrongPassphraseError()
   }
-  return JSON.parse(new TextDecoder().decode(plaintext)) as VaultData
+  const data = JSON.parse(new TextDecoder().decode(plaintext)) as VaultData
+  // Vaults written before v2 credential storage have no `entries` key; backfill
+  // it so every caller can treat the array as always present.
+  return { ...data, entries: data.entries ?? [] }
 }
 
 export function toBase64(bytes: Uint8Array): string {

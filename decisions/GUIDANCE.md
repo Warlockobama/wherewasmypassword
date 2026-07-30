@@ -1,0 +1,8 @@
+- 2026-07-29 DIRECTIVE 0001-request-status-and-decision-needs.md — James requests a status update. Please summarize current progress, what’s actively being worked, what’s blocked, and exp
+- 2026-07-29 DIRECTIVE 0002-status-check-what-are-you-working.md — James is checking in. Reply by appending a `## Status report (date)` section to this doc, and keep it short — it gets re
+- 2026-07-29 DIRECTIVE 0003-status-check-what-are-you-working.md — James is checking in. Reply by appending a `## Status report (date)` section to this doc, and keep it short — it gets re
+- 2026-07-29 DIRECTIVE 0004-v2-credential-storage-autofill-first-avoid.md — For v2 credential storage, prioritize autofill over copy-paste — James wants passwords "kept off the clipboard when poss
+- 2026-07-29 DIRECTIVE 0005-polish-run-fix-animations-review-via.md — James wants a polish/UX pass. He noticed last time he used the app that some of the animations didn't work as intended. 
+- 2026-07-30 DIRECTIVE 0007-status-check-what-are-you-working.md — James is checking in. Reply by appending a `## Status report (date)` section to this doc, and keep it short — it gets re
+- 2026-07-30 UPDATE 0006-mobile-version-proposal.md — 1. **Adopt the recommended PWA path as the starting approach**: James said "That seems reasonable" in response to the PW
+- 2026-07-30 RESOLVED 0006-mobile-version-proposal.md — 1. **Defer a mobile app and focus on the extension**: James said "maybe we should focus on the extension itself." Treat 
