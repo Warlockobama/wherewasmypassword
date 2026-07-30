@@ -36,3 +36,12 @@ If nothing is waiting on him, say so plainly — that's a useful answer.
    load the packed extension and fill an actual login page. It is
    covered by unit tests but has never been exercised against a live
    site, and it is the headline v2 feature.
+
+### Addendum, later the same day
+
+The mobile answer arrived (defer, focus on the extension) and the new
+directive `0008` landed while this session was still running. Both were
+picked up: mobile work is parked on a branch and off master, and the
+compromised-browser review is written up in `0008` with the fixes committed.
+Three calls now wait on James in `0009`, one of which — popup versus tab —
+may be the reason autofill does not currently work at all.
