@@ -104,7 +104,8 @@ export default function PlacementJourney({
               value={imagery}
               onChange={(e) => setImagery(e.target.value)}
               rows={2}
-              placeholder={`What do you see? ${locus.anchor.name} + “${word}” ${locus.prompt}…`}
+              aria-label="Describe your vivid image"
+              placeholder={`What do you see? ${locus.anchor.name} + "${word}" ${locus.prompt}…`}
               className="w-full rounded-lg border-2 border-dusk/40 bg-parchment p-2 text-sm focus:border-amber-glow focus:outline-none"
             />
             <div className="flex justify-center">

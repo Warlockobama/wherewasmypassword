@@ -34,7 +34,7 @@ export default function CredentialForm({
           value={label}
           onChange={(e) => setLabel(e.target.value)}
           placeholder="e.g. GitHub"
-          className="mt-1 block w-full rounded border border-dusk/30 bg-parchment px-3 py-1.5 text-dusk"
+          className="mt-1 block w-full rounded border border-dusk/30 bg-parchment px-3 py-1.5 text-dusk focus:border-amber-glow focus:outline-none"
         />
       </label>
 
@@ -45,7 +45,7 @@ export default function CredentialForm({
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder="https://github.com"
-          className="mt-1 block w-full rounded border border-dusk/30 bg-parchment px-3 py-1.5 text-dusk"
+          className="mt-1 block w-full rounded border border-dusk/30 bg-parchment px-3 py-1.5 text-dusk focus:border-amber-glow focus:outline-none"
         />
       </label>
 
@@ -56,7 +56,7 @@ export default function CredentialForm({
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           placeholder="you@example.com"
-          className="mt-1 block w-full rounded border border-dusk/30 bg-parchment px-3 py-1.5 text-dusk"
+          className="mt-1 block w-full rounded border border-dusk/30 bg-parchment px-3 py-1.5 text-dusk focus:border-amber-glow focus:outline-none"
         />
       </label>
 
@@ -67,10 +67,11 @@ export default function CredentialForm({
             type={showPassword ? 'text' : 'password'}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="block w-full rounded border border-dusk/30 bg-parchment px-3 py-1.5 pr-20 text-dusk"
+            className="block w-full rounded border border-dusk/30 bg-parchment px-3 py-1.5 pr-20 text-dusk focus:border-amber-glow focus:outline-none"
           />
           <button
             type="button"
+            aria-label={showPassword ? 'Hide password' : 'Show password'}
             className="absolute right-10 top-1/2 -translate-y-1/2 text-xs text-dusk/60 hover:text-dusk"
             onClick={() => setShowPassword(!showPassword)}
           >
@@ -79,10 +80,11 @@ export default function CredentialForm({
           <button
             type="button"
             title="Generate random password"
+            aria-label="Generate random password"
             className="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-dusk/60 hover:text-dusk"
             onClick={() => setPassword(generateSitePassword(20))}
           >
-            dice
+            &#x2684;
           </button>
         </div>
       </label>
@@ -93,7 +95,7 @@ export default function CredentialForm({
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           rows={2}
-          className="mt-1 block w-full rounded border border-dusk/30 bg-parchment px-3 py-1.5 text-dusk"
+          className="mt-1 block w-full rounded border border-dusk/30 bg-parchment px-3 py-1.5 text-dusk focus:border-amber-glow focus:outline-none"
         />
       </label>
 

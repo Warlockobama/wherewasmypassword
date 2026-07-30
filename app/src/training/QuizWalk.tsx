@@ -58,13 +58,15 @@ export default function QuizWalk({
     setRevealed(null)
     setGuess('')
     setTransitioning(true)
+    // 550ms = 500ms CSS occluder transition + small buffer so the closing
+    // animation finishes before the next stop mounts.
     if (pos < order.length - 1) {
       setTimeout(() => {
         setPos(pos + 1)
         setTransitioning(false)
-      }, 450)
+      }, 550)
     } else {
-      setTimeout(() => onComplete(misses), 450)
+      setTimeout(() => onComplete(misses), 550)
     }
   }
 

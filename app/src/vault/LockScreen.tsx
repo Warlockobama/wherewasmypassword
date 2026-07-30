@@ -88,6 +88,12 @@ export default function LockScreen({
             {busy ? 'Deriving key…' : 'Unlock'}
           </Button>
         </form>
+        {busy && (
+          <div className="flex items-center justify-center gap-2">
+            <div className="h-5 w-5 animate-spin rounded-full border-2 border-dusk/20 border-t-amber-glow" />
+            <span className="text-sm text-dusk/70">Stretching passphrase (Argon2id)…</span>
+          </div>
+        )}
         {error && <p className="text-sm font-semibold text-brick">{error}</p>}
       </Panel>
       <button

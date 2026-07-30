@@ -31,7 +31,7 @@ export function Panel({ children, className = '' }: { children: ReactNode; class
 /** Full-page centered column used by every phase. */
 export function Screen({ children, wide = false }: { children: ReactNode; wide?: boolean }) {
   return (
-    <div className="flex min-h-full flex-col items-center overflow-y-auto px-4 py-6">
+    <div className="screen-fade-in flex min-h-full flex-col items-center overflow-y-auto px-4 py-6">
       <div className={`flex w-full flex-col items-center gap-4 ${wide ? 'max-w-3xl' : 'max-w-xl'}`}>{children}</div>
     </div>
   )

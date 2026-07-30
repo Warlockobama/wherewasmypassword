@@ -21,6 +21,8 @@ export default function DemoWalk({ onComplete }: { onComplete: () => void }) {
   const [step, setStep] = useState(0)
   const [opened, setOpened] = useState(false)
   const [answer, setAnswer] = useState<string | null>(null)
+  // Blocks interaction while the compartment-closing animation plays.
+  const [transitioning, setTransitioning] = useState(false)
 
   const locus = LOCI[step]
   const clues = Object.fromEntries(
@@ -31,12 +33,19 @@ export default function DemoWalk({ onComplete }: { onComplete: () => void }) {
   )
 
   const advanceWalk = () => {
+    setOpened(false)
+    setTransitioning(true)
     if (step < DEMO.length - 1) {
-      setStep(step + 1)
-      setOpened(false)
+      setTimeout(() => {
+        setStep(step + 1)
+        setTransitioning(false)
+      }, 550)
     } else {
-      setStage('quiz-forward')
-      setAnswer(null)
+      setTimeout(() => {
+        setStage('quiz-forward')
+        setAnswer(null)
+        setTransitioning(false)
+      }, 550)
     }
   }
 
@@ -50,14 +59,16 @@ export default function DemoWalk({ onComplete }: { onComplete: () => void }) {
             stepIndex={step}
             clues={clues}
             openLocusId={opened ? locus.id : null}
-            onLocusClick={(id) => id === locus.id && setOpened(true)}
+            onLocusClick={(id) => !transitioning && id === locus.id && setOpened(true)}
             highlightLocusId={opened ? null : locus.id}
             activeLocusCount={DEMO.length}
             completedSteps={new Set(Array.from({ length: step }, (_, i) => i))}
             showNav={false}
           />
           <Panel className="w-full text-center">
-            {!opened ? (
+            {transitioning ? (
+              <p className="text-dusk/50">…</p>
+            ) : !opened ? (
               <p>
                 Someone already hid three words along this route. Walk up and{' '}
                 <strong>
