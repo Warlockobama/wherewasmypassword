@@ -6,6 +6,7 @@ import { LOCI } from '../palace/loci.ts'
 import { downloadBackup } from '../storage/backup.ts'
 import { deleteVault, type StoredVault } from '../storage/db.ts'
 import { Button, Panel, Screen, Title } from '../ui.tsx'
+import { isExtensionContext } from '../platform.ts'
 import type { Credential } from '../credentials/types.ts'
 import CredentialList from '../credentials/CredentialList.tsx'
 import CredentialForm from '../credentials/CredentialForm.tsx'
@@ -151,8 +152,9 @@ export default function UnlockedHome({
           )}
         </div>
         <p className="text-sm text-dusk/80">
-          Autofill injects credentials directly into the login page — no clipboard exposure.
-          Use Copy as a fallback; it auto-clears after 30 seconds.
+          {isExtensionContext()
+            ? 'Autofill injects credentials directly into the login page — no clipboard exposure. Use Copy as a fallback; it auto-clears after 30 seconds.'
+            : 'Copy puts a password on the clipboard just long enough to paste it — it auto-clears after 30 seconds. Install the browser extension for autofill that skips the clipboard entirely.'}
         </p>
         <CredentialList
           credentials={data.entries}

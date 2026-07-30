@@ -67,12 +67,14 @@ export default function CredentialForm({
             type={showPassword ? 'text' : 'password'}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="block w-full rounded border border-dusk/30 bg-parchment px-3 py-1.5 pr-20 text-dusk focus:border-amber-glow focus:outline-none"
+            className="block w-full rounded border border-dusk/30 bg-parchment px-3 py-1.5 pr-24 text-dusk focus:border-amber-glow focus:outline-none"
           />
+          {/* Both overlay controls get real padding and are pulled apart: at
+              their old size they were ~16px tall and 8px from each other. */}
           <button
             type="button"
             aria-label={showPassword ? 'Hide password' : 'Show password'}
-            className="absolute right-10 top-1/2 -translate-y-1/2 text-xs text-dusk/60 hover:text-dusk"
+            className="absolute right-11 top-1/2 -translate-y-1/2 touch-manipulation px-2 py-2 text-xs text-dusk/60 hover:text-dusk active:text-dusk"
             onClick={() => setShowPassword(!showPassword)}
           >
             {showPassword ? 'hide' : 'show'}
@@ -81,10 +83,17 @@ export default function CredentialForm({
             type="button"
             title="Generate random password"
             aria-label="Generate random password"
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-dusk/60 hover:text-dusk"
+            className="absolute right-1 top-1/2 -translate-y-1/2 touch-manipulation px-2 py-2 text-dusk/60 hover:text-dusk active:text-dusk"
             onClick={() => setPassword(generateSitePassword(20))}
           >
-            &#x2684;
+            {/* Drawn rather than a ⚄ character: the dice glyphs are missing
+                from plenty of system fonts and render as a tofu box. */}
+            <svg viewBox="0 0 16 16" className="h-4 w-4" aria-hidden="true">
+              <rect x="1" y="1" width="14" height="14" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" />
+              <circle cx="5" cy="5" r="1.4" fill="currentColor" />
+              <circle cx="8" cy="8" r="1.4" fill="currentColor" />
+              <circle cx="11" cy="11" r="1.4" fill="currentColor" />
+            </svg>
           </button>
         </div>
       </label>

@@ -15,6 +15,20 @@ export function urlMatches(storedUrl: string, pageUrl: string): boolean {
   }
 }
 
+/**
+ * The origin a stored credential belongs to, or '' if it has no usable URL.
+ * This is what travels with an autofill request and what the content script
+ * compares against the page it is about to type into.
+ */
+export function credentialOrigin(storedUrl: string): string {
+  if (!storedUrl.trim()) return ''
+  try {
+    return new URL(storedUrl.includes('://') ? storedUrl : `https://${storedUrl}`).origin
+  } catch {
+    return ''
+  }
+}
+
 function extractHost(raw: string): string {
   try {
     return new URL(raw.includes('://') ? raw : `https://${raw}`).hostname

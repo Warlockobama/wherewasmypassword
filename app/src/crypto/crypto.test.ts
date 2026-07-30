@@ -44,7 +44,9 @@ describe('wordlist', () => {
   })
 
   it('imageable list is a healthy, unique, lowercase subset of the EFF list', () => {
-    expect(IMAGEABLE_WORDLIST.length).toBeGreaterThanOrEqual(2048) // >= 11 bits/word
+    // Floor set just under the current 2255: a future curation pass must not be
+    // able to quietly cut per-word entropy without this failing.
+    expect(IMAGEABLE_WORDLIST.length).toBeGreaterThanOrEqual(2200) // >= 11.1 bits/word
     expect(new Set(IMAGEABLE_WORDLIST).size).toBe(IMAGEABLE_WORDLIST.length)
     const eff = new Set(EFF_WORDLIST)
     for (const w of IMAGEABLE_WORDLIST) {
@@ -63,6 +65,8 @@ describe('wordlist', () => {
   it('rejects out-of-range word counts', () => {
     expect(() => generatePassphrase(3)).toThrow(RangeError)
     expect(() => generatePassphrase(9)).toThrow(RangeError)
+    // 5 words is 55.7 bits — below the offline-attack floor, so it is rejected.
+    expect(() => generatePassphrase(5)).toThrow(RangeError)
   })
 
   it('reroll replaces only the requested index', () => {
@@ -214,5 +218,34 @@ describe('practice schedule', () => {
   it('reports due status', () => {
     expect(isPracticeDue(t0, [], t0 + 2 * DAY)).toBe(true)
     expect(isPracticeDue(t0, [], t0 + DAY / 2)).toBe(false)
+  })
+})
+
+describe('backup files from untrusted sources', () => {
+  const goodVault = {
+    version: 1 as const,
+    salt: 'c2FsdA==',
+    kdfParams: TEST_KDF,
+    iv: 'aXY=',
+    ciphertext: 'Y3Q=',
+    createdAt: 1,
+    updatedAt: 2,
+  }
+  const wrap = (vault: unknown) =>
+    JSON.stringify({ kind: 'wherewasmypassword-backup', exportedAt: 1, vault })
+
+  it('accepts a well-formed backup', () => {
+    expect(parseBackup(wrap(goodVault)).salt).toBe(goodVault.salt)
+  })
+
+  it('rejects absurd KDF parameters from an untrusted file', () => {
+    // 2 TiB of Argon2id memory would wedge the unlock screen permanently.
+    const hostile = { ...goodVault, kdfParams: { ...TEST_KDF, memoryKiB: 2 ** 31 } }
+    expect(() => parseBackup(wrap(hostile))).toThrow(/key-derivation/)
+
+    expect(() => parseBackup(wrap({ ...goodVault, kdfParams: { ...TEST_KDF, iterations: 0 } }))).toThrow()
+    expect(() =>
+      parseBackup(wrap({ ...goodVault, kdfParams: { ...TEST_KDF, algorithm: 'md5' } })),
+    ).toThrow()
   })
 })

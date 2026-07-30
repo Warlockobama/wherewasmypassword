@@ -15,9 +15,52 @@ html, body, #root {
   height: 100%;
 }
 
+html {
+  /* Stop mobile browsers inflating text when the page is used in landscape. */
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   background-color: var(--color-parchment);
   color: var(--color-ink);
+}
+
+/* Compartment hotspots are invisible by design and discovered by the cursor
+   changing shape — which never happens on a touch screen. Give touch users a
+   faint dashed edge instead. */
+@media (pointer: coarse) {
+  .locus-touch-hint {
+    stroke: var(--color-amber-glow);
+    stroke-width: 3;
+    stroke-dasharray: 9 13;
+    opacity: 0.4;
+  }
+}
+
+/* Clue text is drawn inside an 800x500 viewBox that scales down to ~358px on a
+   phone, so these sizes are bumped there to stay readable. Inline SVG inherits
+   document CSS, and the values are user units, not CSS pixels. */
+.clue-word {
+  font-weight: 700;
+  font-size: 19px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.clue-imagery {
+  font-size: 11px;
+  font-style: italic;
+  opacity: 0.75;
+}
+
+@media (max-width: 640px) {
+  .clue-word {
+    font-size: 25px;
+  }
+
+  .clue-imagery {
+    font-size: 14px;
+  }
 }
 
 @keyframes locus-pulse {

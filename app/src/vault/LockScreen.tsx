@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { deriveKey } from '../crypto/kdf.ts'
 import { decryptVault, fromBase64, WrongPassphraseError, type VaultData } from '../crypto/vault.ts'
 import { parseBackup } from '../storage/backup.ts'
-import { saveVault, type StoredVault } from '../storage/db.ts'
+import { archiveCurrentVault, saveVault, type StoredVault } from '../storage/db.ts'
 import { Button, Panel, Screen, Title } from '../ui.tsx'
 
 export default function LockScreen({
@@ -19,6 +19,7 @@ export default function LockScreen({
   const [phrase, setPhrase] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [pendingRestore, setPendingRestore] = useState<StoredVault | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const unlock = async () => {
@@ -44,13 +45,30 @@ export default function LockScreen({
     }
   }
 
-  const restore = async (file: File) => {
+  /**
+   * Restoring replaces the vault that is already on this device, so it asks
+   * first — and keeps the outgoing record. Without that, one wrong file (or
+   * one hostile script) permanently destroys a vault with no other copy.
+   */
+  const stageRestore = async (file: File) => {
+    setError(null)
     try {
-      const restored = parseBackup(await file.text())
-      await saveVault(restored)
-      onRestored(restored)
+      setPendingRestore(parseBackup(await file.text()))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const confirmRestore = async () => {
+    if (!pendingRestore) return
+    try {
+      await archiveCurrentVault()
+      await saveVault(pendingRestore)
+      onRestored(pendingRestore)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setPendingRestore(null)
     }
   }
 
@@ -96,13 +114,32 @@ export default function LockScreen({
         )}
         {error && <p className="text-sm font-semibold text-brick">{error}</p>}
       </Panel>
-      <button
-        type="button"
-        className="text-sm text-dusk/60 underline underline-offset-2 hover:text-dusk"
-        onClick={() => fileRef.current?.click()}
-      >
-        Restore from a backup file instead
-      </button>
+      {pendingRestore ? (
+        <Panel className="w-full space-y-3 border-brick/60 bg-brick/10 text-sm">
+          <p>
+            This replaces the vault already on this device with the backup from{' '}
+            <strong>{new Date(pendingRestore.createdAt).toLocaleDateString()}</strong>. You will
+            need the passphrase that belongs to that backup. The current vault is kept aside, but
+            the app only ever opens the restored one.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button className="!border-brick !bg-brick" onClick={() => void confirmRestore()}>
+              Replace my vault
+            </Button>
+            <Button variant="secondary" onClick={() => setPendingRestore(null)}>
+              Keep the current vault
+            </Button>
+          </div>
+        </Panel>
+      ) : (
+        <button
+          type="button"
+          className="text-sm text-dusk/60 underline underline-offset-2 hover:text-dusk"
+          onClick={() => fileRef.current?.click()}
+        >
+          Restore from a backup file instead
+        </button>
+      )}
       <input
         ref={fileRef}
         type="file"
@@ -110,7 +147,7 @@ export default function LockScreen({
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0]
-          if (f) void restore(f)
+          if (f) void stageRestore(f)
           e.target.value = ''
         }}
       />

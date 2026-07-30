@@ -26,6 +26,7 @@ interface WwmpDB extends DBSchema {
 
 const DB_NAME = 'wherewasmypassword'
 const VAULT_KEY = 'primary'
+const PREVIOUS_VAULT_KEY = 'previous'
 const META_KEY = 'practice'
 
 function db() {
@@ -41,6 +42,22 @@ export async function saveVault(record: StoredVault): Promise<void> {
   await (await db()).put('vault', record, VAULT_KEY)
 }
 
+/**
+ * Copy the current vault aside before something overwrites it (a restore).
+ * Restoring the wrong file would otherwise destroy the only copy, and the
+ * archived record is still ciphertext — it is no more sensitive than the live
+ * one, and it is the difference between a mistake and a permanent loss.
+ */
+export async function archiveCurrentVault(): Promise<void> {
+  const database = await db()
+  const current = await database.get('vault', VAULT_KEY)
+  if (current) await database.put('vault', current, PREVIOUS_VAULT_KEY)
+}
+
+export async function loadArchivedVault(): Promise<StoredVault | undefined> {
+  return (await db()).get('vault', PREVIOUS_VAULT_KEY)
+}
+
 export async function loadVault(): Promise<StoredVault | undefined> {
   return (await db()).get('vault', VAULT_KEY)
 }
@@ -48,6 +65,7 @@ export async function loadVault(): Promise<StoredVault | undefined> {
 export async function deleteVault(): Promise<void> {
   const database = await db()
   await database.delete('vault', VAULT_KEY)
+  await database.delete('vault', PREVIOUS_VAULT_KEY)
   await database.delete('meta', META_KEY)
 }
 

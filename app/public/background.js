@@ -9,8 +9,11 @@ chrome.action.onClicked.addListener(() => {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type !== 'wwmp-autofill-relay') return false
 
-  // Only accept from our own extension pages, not from content scripts.
-  if (sender.id !== chrome.runtime.id || !sender.url?.startsWith('chrome-extension://')) {
+  // Only accept from our own extension pages, not from content scripts and not
+  // from another extension. Compare the exact origin rather than the scheme:
+  // `chrome-extension://` alone would also match a different extension's page
+  // if an external listener were ever added.
+  if (sender.id !== chrome.runtime.id || sender.origin !== `chrome-extension://${chrome.runtime.id}`) {
     sendResponse({ ok: false, reason: 'unauthorized-sender' })
     return true
   }
@@ -21,13 +24,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: false, reason: 'no-active-tab' })
       return
     }
+    // Our own pages are never a fill target: filling one would mean typing a
+    // password into this extension's UI.
+    if (tab.url?.startsWith('chrome-extension://') || tab.url?.startsWith('about:')) {
+      sendResponse({ ok: false, reason: 'no-page-tab' })
+      return
+    }
     // Inject the content script on demand, then send the autofill message.
     chrome.scripting
       .executeScript({ target: { tabId: tab.id }, files: ['content.js'] })
       .then(() => {
         chrome.tabs.sendMessage(
           tab.id,
-          { type: 'wwmp-autofill', username: msg.username, password: msg.password },
+          {
+            type: 'wwmp-autofill',
+            username: msg.username,
+            password: msg.password,
+            // The content script re-checks this against its own location.
+            expectedOrigin: msg.expectedOrigin,
+            overrideOrigin: msg.overrideOrigin === true,
+          },
           (response) => {
             if (chrome.runtime.lastError) {
               sendResponse({

@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Button, Panel } from '../ui.tsx'
+import { isExtensionContext } from '../platform.ts'
 import { requestAutofill } from './autofill.ts'
+import { credentialOrigin } from './match-url.ts'
 import { copyWithAutoClear } from './clipboard.ts'
 import type { Credential } from './types.ts'
 
@@ -30,6 +32,9 @@ export default function CredentialList({
   )
 }
 
+const ROW_ACTION =
+  'touch-manipulation py-2 text-xs text-dusk/60 underline underline-offset-2 hover:text-dusk active:text-dusk'
+
 function CredentialRow({
   cred,
   onEdit,
@@ -41,14 +46,33 @@ function CredentialRow({
 }) {
   const [status, setStatus] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
+  const [mismatch, setMismatch] = useState<{ page: string; expected: string } | null>(null)
+  const canAutofill = isExtensionContext()
 
-  const handleAutofill = async () => {
+  const handleAutofill = async (overrideOrigin = false) => {
     setStatus('Filling...')
-    const result = await requestAutofill(cred.username, cred.password)
+    setMismatch(null)
+    const result = await requestAutofill({
+      username: cred.username,
+      password: cred.password,
+      expectedOrigin: credentialOrigin(cred.url),
+      overrideOrigin,
+    })
     if (result.ok && result.filled) {
       setStatus('Filled')
+    } else if (result.reason === 'origin-mismatch') {
+      // Never fill silently across origins: this is exactly what a look-alike
+      // phishing page is counting on.
+      setStatus(null)
+      setMismatch({
+        page: result.pageOrigin ?? 'this page',
+        expected: result.expectedOrigin ?? 'the stored site',
+      })
+      return
     } else if (result.reason === 'no-password-field') {
       setStatus('No login field found on page')
+    } else if (result.reason === 'no-page-tab') {
+      setStatus('Open the login page in a tab, then try again')
     } else if (result.reason === 'not-in-extension') {
       setStatus('Autofill requires the extension context')
     } else {
@@ -71,19 +95,29 @@ function CredentialRow({
     <Panel className="w-full space-y-2">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="font-semibold text-dusk">{cred.label}</p>
+          {/* All three truncate: on a phone this column is ~120px wide and an
+              email address or long label would otherwise push the row wider. */}
+          <p className="truncate font-semibold text-dusk">{cred.label}</p>
           {cred.url && (
             <p className="truncate text-xs text-dusk/50">{cred.url}</p>
           )}
           {cred.username && (
-            <p className="text-sm text-dusk/70">{cred.username}</p>
+            <p className="truncate text-sm text-dusk/70">{cred.username}</p>
           )}
         </div>
         <div className="flex shrink-0 gap-1.5">
-          <Button variant="primary" className="!px-3 !py-1 !text-sm" onClick={handleAutofill}>
-            Autofill
-          </Button>
-          <Button variant="secondary" className="!px-3 !py-1 !text-sm" onClick={handleCopy}>
+          {/* Autofill needs the extension APIs; on mobile/PWA it can't work,
+              so copy-with-auto-clear becomes the primary action instead. */}
+          {canAutofill && (
+            <Button variant="primary" className="!px-3 !py-1 !text-sm" onClick={() => void handleAutofill()}>
+              Autofill
+            </Button>
+          )}
+          <Button
+            variant={canAutofill ? 'secondary' : 'primary'}
+            className="!px-3 !py-1 !text-sm"
+            onClick={handleCopy}
+          >
             Copy
           </Button>
         </div>
@@ -93,10 +127,34 @@ function CredentialRow({
         <p className="text-xs text-dusk/70">{status}</p>
       )}
 
-      <div className="flex gap-2 border-t border-dusk/10 pt-2">
+      {mismatch && (
+        <div className="space-y-2 rounded-lg border-2 border-brick/60 bg-brick/10 p-2 text-xs">
+          <p>
+            This page is <strong className="break-all">{mismatch.page}</strong>, but this password
+            is for <strong className="break-all">{mismatch.expected}</strong>. If you did not expect
+            that, the page may be impersonating the real site.
+          </p>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              className={`${ROW_ACTION} font-semibold text-brick`}
+              onClick={() => void handleAutofill(true)}
+            >
+              Fill anyway
+            </button>
+            <button type="button" className={ROW_ACTION} onClick={() => setMismatch(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Row actions are padded to a usable tap height, and Delete sits at the
+          far end so a mistap can't land on Confirm delete. */}
+      <div className="flex items-center gap-4 border-t border-dusk/10 pt-1">
         <button
           type="button"
-          className="text-xs text-dusk/50 underline underline-offset-2 hover:text-dusk"
+          className={ROW_ACTION}
           onClick={() => onEdit(cred)}
         >
           Edit
@@ -104,7 +162,7 @@ function CredentialRow({
         {!confirming ? (
           <button
             type="button"
-            className="text-xs text-brick/60 underline underline-offset-2 hover:text-brick"
+            className={`${ROW_ACTION} ml-auto text-brick/70 hover:text-brick active:text-brick`}
             onClick={() => setConfirming(true)}
           >
             Delete
@@ -113,17 +171,17 @@ function CredentialRow({
           <>
             <button
               type="button"
-              className="text-xs font-semibold text-brick underline underline-offset-2"
-              onClick={() => onDelete(cred.id)}
-            >
-              Confirm delete
-            </button>
-            <button
-              type="button"
-              className="text-xs text-dusk/50 underline underline-offset-2"
+              className={`${ROW_ACTION} ml-auto`}
               onClick={() => setConfirming(false)}
             >
               Cancel
+            </button>
+            <button
+              type="button"
+              className={`${ROW_ACTION} font-semibold text-brick`}
+              onClick={() => onDelete(cred.id)}
+            >
+              Confirm delete
             </button>
           </>
         )}

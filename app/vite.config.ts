@@ -15,7 +15,8 @@ const CSP = [
   "object-src 'none'",
   "base-uri 'none'",
   "form-action 'none'",
-  "frame-ancestors 'none'",
+  // No frame-ancestors here: it is ignored in a <meta> CSP and only logs a
+  // console error. When the PWA is hosted, send it as an HTTP header instead.
 ].join('; ')
 
 function cspPlugin(): Plugin {

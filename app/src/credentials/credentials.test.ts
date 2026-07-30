@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { generateSitePassword } from './generate-password.ts'
 import { newCredentialId } from './credential-id.ts'
-import { urlMatches } from './match-url.ts'
+import { urlMatches, credentialOrigin } from './match-url.ts'
 
 describe('generateSitePassword', () => {
   it('produces a string of the requested length', () => {
@@ -63,5 +63,25 @@ describe('urlMatches', () => {
 
   it('returns false for empty or garbage', () => {
     expect(urlMatches('', '')).toBe(false)
+  })
+})
+
+describe('credentialOrigin', () => {
+  it('reduces a stored URL to the origin autofill compares against', () => {
+    expect(credentialOrigin('https://github.com/login')).toBe('https://github.com')
+    expect(credentialOrigin('github.com')).toBe('https://github.com')
+    expect(credentialOrigin('https://mail.example.com:8443/x')).toBe('https://mail.example.com:8443')
+  })
+
+  it('is empty when there is nothing to compare, so no false match is possible', () => {
+    expect(credentialOrigin('')).toBe('')
+    expect(credentialOrigin('   ')).toBe('')
+    expect(credentialOrigin('not a url at all')).toBe('')
+  })
+
+  it('does not treat a look-alike host as the real one', () => {
+    const real = credentialOrigin('https://github.com')
+    expect(credentialOrigin('https://github.com.evil.test')).not.toBe(real)
+    expect(credentialOrigin('http://github.com')).not.toBe(real)
   })
 })

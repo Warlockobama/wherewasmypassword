@@ -28,7 +28,27 @@ export function parseBackup(text: string): StoredVault {
   if (v.version !== 1 || !v.salt || !v.iv || !v.ciphertext || !v.kdfParams) {
     throw new Error('Backup file is incomplete or from an unsupported version.')
   }
+  assertSaneKdfParams(v.kdfParams)
   return v
+}
+
+/**
+ * A backup file is untrusted input, and its KDF parameters are fed straight to
+ * Argon2id on the next unlock. Unchecked, `memoryKiB: 2**31` would ask for two
+ * terabytes and wedge the unlock screen for good.
+ */
+function assertSaneKdfParams(params: StoredVault['kdfParams']): void {
+  const inRange = (n: unknown, lo: number, hi: number) =>
+    typeof n === 'number' && Number.isInteger(n) && n >= lo && n <= hi
+
+  if (
+    params.algorithm !== 'argon2id' ||
+    !inRange(params.memoryKiB, 8 * 1024, 1024 * 1024) ||
+    !inRange(params.iterations, 1, 10) ||
+    !inRange(params.parallelism, 1, 4)
+  ) {
+    throw new Error('Backup file has unsupported key-derivation settings.')
+  }
 }
 
 /** Trigger a download of the encrypted vault as a .wwmp.json file. */

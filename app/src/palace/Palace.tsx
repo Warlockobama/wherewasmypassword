@@ -53,7 +53,7 @@ export default function Palace({
   return (
     <div className="mx-auto w-full max-w-3xl select-none">
       {/* room title */}
-      <div className="mb-1 flex items-baseline justify-between px-1">
+      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3 px-1">
         <h2 className="font-display text-xl text-dusk">{sceneName(locus.sceneId)}</h2>
         <span className="text-sm text-dusk/70">
           stop {stepIndex + 1} of {activeLocusCount} — {locus.name}
@@ -79,8 +79,9 @@ export default function Palace({
         )}
       </div>
 
-      {/* minimap: the route as a strip of stops */}
-      <ol className="mt-3 flex items-center justify-center gap-1">
+      {/* minimap: the route as a strip of stops. It wraps because eight stops
+          plus connectors need ~364px, more than a 390px phone has to give. */}
+      <ol className="mt-3 flex flex-wrap items-center justify-center gap-x-1 gap-y-2">
         {LOCI.map((l, i) => {
           const isActive = i === stepIndex
           const isUsed = i < activeLocusCount
@@ -93,8 +94,11 @@ export default function Palace({
                 disabled={!isUsed || !showNav || !onStepChange}
                 onClick={() => onStepChange?.(i)}
                 title={l.name}
+                // The number is the only visible content, so touch users — who
+                // never see the tooltip — need the name announced some other way.
+                aria-label={`Stop ${i + 1}: ${l.name}`}
                 className={[
-                  'flex h-7 min-w-7 items-center justify-center rounded-full border-2 px-1 text-xs font-bold transition-all',
+                  'flex h-8 min-w-8 touch-manipulation items-center justify-center rounded-full border-2 px-1 text-xs font-bold transition-all',
                   isActive
                     ? 'scale-110 border-amber-glow bg-amber-glow text-white shadow'
                     : isDone
@@ -123,9 +127,11 @@ function NavButton({ side, disabled, onClick }: { side: 'left' | 'right'; disabl
       disabled={disabled}
       onClick={onClick}
       className={[
-        'absolute top-1/2 -translate-y-1/2 rounded-full border-2 border-dusk bg-parchment/90 p-2 text-xl leading-none text-dusk shadow transition-all',
+        'absolute top-1/2 -translate-y-1/2 touch-manipulation rounded-full border-2 border-dusk bg-parchment/90 p-2.5 text-xl leading-none text-dusk shadow transition-all',
         side === 'left' ? 'left-2' : 'right-2',
-        disabled ? 'cursor-default opacity-25' : 'hover:scale-110 hover:bg-amber-glow hover:text-white',
+        disabled
+          ? 'cursor-default opacity-25'
+          : 'hover:scale-110 hover:bg-amber-glow hover:text-white active:bg-amber-glow active:text-white',
       ].join(' ')}
     >
       {side === 'left' ? '←' : '→'}

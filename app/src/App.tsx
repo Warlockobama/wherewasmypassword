@@ -35,6 +35,7 @@ type Phase =
 
 const AUTO_LOCK_MS = 5 * 60 * 1000
 const HIDDEN_LOCK_MS = 60 * 1000
+const MAX_SESSION_MS = 30 * 60 * 1000
 
 function shuffled(n: number): number[] {
   const order = Array.from({ length: n }, (_, i) => i)
@@ -86,7 +87,11 @@ export default function App() {
   useEffect(() => {
     if (phase !== 'unlocked') return
     let hiddenTimer: number | undefined
-    const arm = () => {
+    // Only a real human keeps the vault open. Synthetic events are ignored, so
+    // a script on the page can't hold the session — and the key — open forever
+    // with a dispatched keydown every few minutes.
+    const arm = (event?: Event) => {
+      if (event && !event.isTrusted) return
       window.clearTimeout(lockTimer.current)
       lockTimer.current = window.setTimeout(lock, AUTO_LOCK_MS)
     }
@@ -98,14 +103,21 @@ export default function App() {
       }
     }
     arm()
+    // A hard ceiling no amount of activity can extend: even a genuinely busy
+    // session should not keep the key in memory all day.
+    const sessionCap = window.setTimeout(lock, MAX_SESSION_MS)
     const events = ['pointerdown', 'keydown'] as const
     events.forEach((e) => window.addEventListener(e, arm))
     document.addEventListener('visibilitychange', onVisibility)
+    // Leaving the page is as good a reason to drop the key as any.
+    window.addEventListener('pagehide', lock)
     return () => {
       window.clearTimeout(lockTimer.current)
       window.clearTimeout(hiddenTimer)
+      window.clearTimeout(sessionCap)
       events.forEach((e) => window.removeEventListener(e, arm))
       document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('pagehide', lock)
     }
   }, [phase])
 
@@ -246,6 +258,8 @@ export default function App() {
           daysUntilPractice={meta ? daysUntilPractice(meta.createdAt, meta.practicedAt) : 0}
           onLock={lock}
           onDeleted={() => {
+            // Same key hygiene as lock(): dropping the reference is not enough.
+            unlocked.rawKey.fill(0)
             setUnlocked(null)
             setStored(null)
             setMeta(null)

@@ -69,7 +69,7 @@ export function Hotspot({
       {highlighted && (
         <circle cx={cx} cy={cy} r={r} fill="none" stroke={P.amber} strokeWidth={4} className="locus-pulse" />
       )}
-      <circle cx={cx} cy={cy} r={r} fill="transparent" />
+      <circle cx={cx} cy={cy} r={r} fill="transparent" className="locus-touch-hint" />
     </g>
   )
 }
@@ -138,13 +138,13 @@ export function ClueCard({ word, imagery, anchorEmoji }: { word: string; imagery
             overflow: 'hidden',
           }}
         >
-          <div style={{ fontWeight: 700, fontSize: 19, letterSpacing: 1, textTransform: 'uppercase' }}>{word}</div>
+          {/* Sizes live in index.css (.clue-word / .clue-imagery) so a media
+              query can enlarge them on phones, where the scene is downscaled. */}
+          <div className="clue-word">{word}</div>
           {imagery && (
             <div
+              className="clue-imagery"
               style={{
-                fontSize: 11,
-                fontStyle: 'italic',
-                opacity: 0.75,
                 display: '-webkit-box',
                 WebkitLineClamp: 3,
                 WebkitBoxOrient: 'vertical',

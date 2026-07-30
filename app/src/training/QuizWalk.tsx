@@ -95,7 +95,7 @@ export default function QuizWalk({
               <span className="text-dusk/60">({locus.anchor.name} is holding it)</span>
             </p>
             <form
-              className="flex justify-center gap-2"
+              className="flex flex-wrap items-center justify-center gap-2"
               onSubmit={(e) => {
                 e.preventDefault()
                 submit()
@@ -109,7 +109,7 @@ export default function QuizWalk({
                 autoCapitalize="off"
                 autoCorrect="off"
                 spellCheck={false}
-                className="rounded-lg border-2 border-dusk/40 bg-parchment px-3 py-2 font-display text-lg focus:border-amber-glow focus:outline-none"
+                className="w-48 min-w-0 rounded-lg border-2 border-dusk/40 bg-parchment px-3 py-2 font-display text-lg focus:border-amber-glow focus:outline-none"
               />
               <Button onClick={submit} disabled={!guess.trim()}>
                 Open it

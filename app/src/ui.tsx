@@ -5,16 +5,21 @@ export function Button({
   className = '',
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'ghost' }) {
+  // Every variant carries an `active:` state as well as `hover:`: Tailwind wraps
+  // hover utilities in `@media (hover:hover)`, so on a touch screen hover styles
+  // never fire and a tap would otherwise give no feedback at all.
   const styles = {
     primary:
-      'bg-amber-glow text-white border-amber-glow hover:brightness-105 shadow disabled:opacity-40 disabled:hover:brightness-100',
-    secondary: 'bg-parchment text-dusk border-dusk/50 hover:border-dusk disabled:opacity-40',
-    ghost: 'bg-transparent text-dusk/80 border-transparent hover:text-dusk underline underline-offset-2',
+      'bg-amber-glow text-white border-amber-glow hover:brightness-105 active:brightness-95 shadow disabled:opacity-40 disabled:hover:brightness-100',
+    secondary:
+      'bg-parchment text-dusk border-dusk/50 hover:border-dusk active:border-dusk active:bg-parchment-dark disabled:opacity-40',
+    ghost:
+      'bg-transparent text-dusk/80 border-transparent hover:text-dusk active:text-dusk underline underline-offset-2',
   }[variant]
   return (
     <button
       type="button"
-      className={`rounded-lg border-2 px-5 py-2 font-semibold transition-all ${styles} ${className}`}
+      className={`touch-manipulation rounded-lg border-2 px-5 py-2 font-semibold transition-all active:scale-[0.97] disabled:active:scale-100 ${styles} ${className}`}
       {...props}
     />
   )
