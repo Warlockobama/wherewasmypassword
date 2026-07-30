@@ -102,6 +102,19 @@ describe('credential persistence', () => {
     expect(edited.entries[0].id).toBe(original.id)
     expect(edited.entries[0].createdAt).toBe(original.createdAt)
     expect(edited.entries[0].updatedAt).toBeGreaterThanOrEqual(original.updatedAt)
+    // Nothing beyond the editable fields survives onto the record.
+    expect(Object.keys(edited.entries[0]).sort()).toEqual(Object.keys(original).sort())
+  })
+
+  it('an unknown patch id changes nothing rather than re-targeting a credential', async () => {
+    let [data, stored] = await addCredential(key, baseData, baseStored, { ...fields, label: 'One' })
+    ;[data, stored] = await addCredential(key, data, stored, { ...fields, label: 'Two' })
+
+    const [after] = await editCredential(key, data, stored, {
+      id: 'not-a-real-id',
+      password: 'should-go-nowhere',
+    })
+    expect(after.entries.map((c) => c.password)).toEqual(['s3cret', 's3cret'])
   })
 
   it('leaves other credentials alone when editing or deleting one', async () => {

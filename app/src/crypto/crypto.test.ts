@@ -102,11 +102,45 @@ describe('wordlist', () => {
     )
   })
 
+  it('spending can only ever go up, so a shorter phrase cannot refund re-rolls', () => {
+    // The generator holds one MAX_WORDS-long history rather than trimming it
+    // to the current word count. Trimming would mean going 8 words -> re-roll
+    // the last two -> back to 6 words dropped the charge, and cycling the
+    // count laundered an exhausted budget.
+    const eightWordHistory = [0, 0, 0, 0, 0, 0, 1, 1]
+    const spentAtEight = rerollCostBits(eightWordHistory, 1)
+    // Coming back to six words keeps the same history; only `count` changes.
+    const spentBackAtSix = rerollCostBits(eightWordHistory, 2)
+    expect(spentBackAtSix).toBeGreaterThan(spentAtEight)
+    // Whereas trimming the tail — the bug — would have refunded two bits.
+    expect(rerollCostBits(eightWordHistory.slice(0, 6), 2)).toBeLessThan(spentAtEight)
+  })
+
   it('cannot be re-rolled below the strength of the withdrawn five-word option', () => {
-    // Five words was 55.7 bits and was withdrawn. The re-roll budget has to
-    // leave a floor above that, or filtering re-creates the setting by hand.
-    const floor = 6 * BITS_PER_WORD - MAX_REROLL_BITS
-    expect(floor).toBeGreaterThan(5 * BITS_PER_WORD)
+    // Five words was 55.7 bits and was withdrawn. Spend the budget the way a
+    // user actually would — one re-roll per word until the next one is refused
+    // — and check where that lands, rather than comparing two constants.
+    const rerolls = Array<number>(6).fill(0)
+    let regenerations = 0
+    const affordable = (next: () => number) => next() <= MAX_REROLL_BITS
+    for (let round = 0; round < 200; round++) {
+      let spentSomething = false
+      for (let i = 0; i < rerolls.length; i++) {
+        const trial = [...rerolls]
+        trial[i] += 1
+        if (affordable(() => rerollCostBits(trial, regenerations))) {
+          rerolls[i] += 1
+          spentSomething = true
+        }
+      }
+      if (affordable(() => rerollCostBits(rerolls, regenerations + 1))) {
+        regenerations += 1
+        spentSomething = true
+      }
+      if (!spentSomething) break
+    }
+    const floor = phraseEntropyBits(6, rerollCostBits(rerolls, regenerations))
+    expect(floor).toBeGreaterThan(5 * BITS_PER_WORD) // stronger than the setting we withdrew
     expect(floor).toBeGreaterThan(60)
   })
 
@@ -249,9 +283,31 @@ describe('vault encryption', () => {
     await expect(
       decryptVault(key2, { iv, ciphertext: new Uint8Array(junk) }),
     ).rejects.toThrow(/damaged/i)
+
+    // Authentic plaintext that parses but is not a vault: the shape check,
+    // not the JSON parser, is what has to catch this one.
+    const notAVault = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv },
+      subtle,
+      new TextEncoder().encode('{"version":1,"words":"not an array"}'),
+    )
     await expect(
-      decryptVault(key2, { iv, ciphertext: new Uint8Array(junk) }),
-    ).rejects.not.toBeInstanceOf(WrongPassphraseError)
+      decryptVault(key2, { iv, ciphertext: new Uint8Array(notAVault) }),
+    ).rejects.toThrow(/damaged/i)
+  })
+
+  it('backfills associations as well as entries when they are missing', async () => {
+    const iv = new Uint8Array(12).fill(5)
+    const key3 = new Uint8Array(32).fill(6)
+    const subtle = await crypto.subtle.importKey('raw', key3, 'AES-GCM', false, ['encrypt'])
+    const sparse = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv },
+      subtle,
+      new TextEncoder().encode('{"version":1,"words":["a","b"],"createdAt":1}'),
+    )
+    const data = await decryptVault(key3, { iv, ciphertext: new Uint8Array(sparse) })
+    expect(data.associations).toEqual([])
+    expect(data.entries).toEqual([])
   })
 })
 
@@ -366,13 +422,22 @@ describe('backup files from untrusted sources', () => {
   })
 
   it('keeps only the fields it understands', () => {
-    const restored = parseBackup(
-      wrap({ ...goodVault, smuggled: 'anything', __proto__: { polluted: true } }),
-    )
+    const restored = parseBackup(wrap({ ...goodVault, smuggled: 'anything' }))
     expect('smuggled' in restored).toBe(false)
     expect(Object.keys(restored).sort()).toEqual(
       ['ciphertext', 'createdAt', 'iv', 'kdfParams', 'salt', 'updatedAt', 'version'].sort(),
     )
+  })
+
+  it('a __proto__ key in the raw JSON does not reach the persisted record', () => {
+    // Written as raw text on purpose: in an object literal `__proto__:` sets
+    // the prototype and never survives JSON.stringify, so the same test
+    // written with a literal would assert nothing at all.
+    const raw = `{"kind":"wherewasmypassword-backup","exportedAt":1,"vault":${JSON.stringify(
+      goodVault,
+    ).replace(/^\{/, '{"__proto__":{"polluted":true},')}}`
+    const restored = parseBackup(raw)
+    expect(Object.prototype.hasOwnProperty.call(restored, '__proto__')).toBe(false)
     expect(({} as Record<string, unknown>).polluted).toBeUndefined()
   })
 
@@ -380,5 +445,27 @@ describe('backup files from untrusted sources', () => {
     const restored = parseBackup(wrap({ ...goodVault, createdAt: 'yesterday', updatedAt: NaN }))
     expect(Number.isFinite(restored.createdAt)).toBe(true)
     expect(Number.isFinite(restored.updatedAt)).toBe(true)
+  })
+
+  it('rejects a timestamp far in the future, which would retire the practice schedule', () => {
+    // Finite, so a finiteness check passes it — and `nextPracticeAt` would
+    // then land in the year 33658 and never come due again.
+    const restored = parseBackup(wrap({ ...goodVault, createdAt: 1e15 }))
+    expect(restored.createdAt).toBeLessThanOrEqual(Date.now())
+  })
+
+  it('rejects fields that are strings but not base64', () => {
+    // These used to fail only when `atob` reached them at unlock — after the
+    // restore had already replaced the live vault.
+    expect(() => parseBackup(wrap({ ...goodVault, salt: 'not base64!!' }))).toThrow(/incomplete/i)
+    expect(() => parseBackup(wrap({ ...goodVault, iv: '<script>' }))).toThrow(/incomplete/i)
+    // A salt is 24 base64 characters; there is no reason to accept a huge one.
+    expect(() => parseBackup(wrap({ ...goodVault, salt: 'A'.repeat(500) }))).toThrow(/incomplete/i)
+  })
+
+  it('rejects JSON that parses to something that is not an object', () => {
+    expect(() => parseBackup('null')).toThrow(/not a where was my password/i)
+    expect(() => parseBackup('7')).toThrow(/not a where was my password/i)
+    expect(() => parseBackup('"a string"')).toThrow(/not a where was my password/i)
   })
 })

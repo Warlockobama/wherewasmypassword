@@ -9,19 +9,27 @@ const UI_URL = chrome.runtime.getURL('index.html')
 // our OWN contexts needs none. Keeping the permission set at `activeTab` +
 // `scripting` is worth a slightly less obvious API.
 chrome.action.onClicked.addListener(async () => {
+  let open = null
   try {
-    const contexts = await chrome.runtime.getContexts({
-      contextTypes: ['TAB'],
-      documentUrls: [UI_URL],
-    })
-    const open = contexts.find((c) => c.tabId !== undefined && c.tabId >= 0)
-    if (open) {
-      await chrome.tabs.update(open.tabId, { active: true })
-      if (open.windowId >= 0) await chrome.windows.update(open.windowId, { focused: true })
-      return
-    }
+    // Deliberately unfiltered: `documentUrls` matches exactly, so any query
+    // string or fragment on the UI document — a bookmark, a future route —
+    // would miss and quietly open a second unlocked session.
+    const contexts = await chrome.runtime.getContexts({ contextTypes: ['TAB'] })
+    open = contexts.find((c) => c.documentUrl?.startsWith(UI_URL) && c.tabId >= 0)
   } catch {
     // Older Chromium has no getContexts; opening a new tab is the safe path.
+  }
+  if (open) {
+    // Past this point we must not fall through to `tabs.create`: focusing the
+    // window is a nicety, and failing at it should not open a duplicate tab
+    // on top of the one just activated.
+    try {
+      await chrome.tabs.update(open.tabId, { active: true })
+      if (open.windowId >= 0) await chrome.windows.update(open.windowId, { focused: true })
+    } catch {
+      // The tab went away between the query and the update; nothing to do.
+    }
+    return
   }
   await chrome.tabs.create({ url: UI_URL })
 })

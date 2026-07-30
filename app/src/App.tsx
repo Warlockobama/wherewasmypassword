@@ -315,10 +315,13 @@ export default function App() {
           stored={stored}
           rawKey={unlocked.rawKey}
           daysUntilPractice={meta ? daysUntilPractice(meta.createdAt, meta) : 0}
-          onLock={lock}
+          // Wrapped, not passed directly: React hands the click event to the
+          // first parameter, which is `broadcast`.
+          onLock={() => lock()}
           onDeleted={() => {
             // Same key hygiene as lock(): dropping the reference is not enough.
             unlocked.rawKey.fill(0)
+            void clearClipboardOnLock()
             setUnlocked(null)
             setStored(null)
             setMeta(null)

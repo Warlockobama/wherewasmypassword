@@ -18,7 +18,10 @@ export default function PhraseGenerator({ onComplete }: { onComplete: (words: st
   // How many alternatives the user has looked at, per word and for the phrase
   // as a whole. Choosing among alternatives costs entropy, so it is counted
   // rather than assumed free, and the meter below shows the real number.
-  const [rerolls, setRerolls] = useState<number[]>(() => Array(DEFAULT_WORDS).fill(0))
+  // Always MAX_WORDS long, never trimmed to the current count: dropping the
+  // tail when the user went from eight words back to six would make `spent`
+  // fall, and cycling 8 -> 6 -> 8 would launder an exhausted budget.
+  const [rerolls, setRerolls] = useState<number[]>(() => Array(MAX_WORDS).fill(0))
   const [regenerations, setRegenerations] = useState(0)
 
   const spent = rerollCostBits(rerolls, regenerations)
@@ -40,13 +43,12 @@ export default function PhraseGenerator({ onComplete }: { onComplete: (words: st
    * Any wholesale replacement — the button, or switching word count — is one
    * more phrase the user got to look at, so all of them are charged. Per-word
    * counts carry over deliberately: resetting them would make "re-roll all"
-   * a way to launder an exhausted budget.
+   * a way to launder an exhausted budget. Spending only ever goes up.
    */
   const regenerate = (n: number) => {
     if (!canRegenerate) return
     setCount(n)
     setWords(generatePassphrase(n))
-    setRerolls((prev) => Array.from({ length: n }, (_, i) => prev[i] ?? 0))
     setRegenerations((r) => r + 1)
   }
 

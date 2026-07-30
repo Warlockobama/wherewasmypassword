@@ -3,16 +3,11 @@
  * Comparison is origin-based: scheme + host must match.
  */
 export function urlMatches(storedUrl: string, pageUrl: string): boolean {
-  try {
-    const a = new URL(storedUrl)
-    const b = new URL(pageUrl)
-    return a.origin === b.origin
-  } catch {
-    // If either URL is unparseable, fall back to substring match on hostname.
-    const hostA = extractHost(storedUrl)
-    const hostB = extractHost(pageUrl)
-    return hostA !== '' && hostA === hostB
-  }
+  // Uses the same canonical form as `credentialOrigin`, so this and autofill
+  // cannot disagree about what counts as the same site.
+  const a = credentialOrigin(storedUrl)
+  const b = credentialOrigin(pageUrl)
+  return a !== '' && a === b
 }
 
 /**
@@ -42,12 +37,4 @@ export function credentialOrigin(storedUrl: string): string {
 /** Strip a single leading `www.` label. Shared with the content script. */
 export function canonicalHost(hostname: string): string {
   return hostname.replace(/^www\./i, '')
-}
-
-function extractHost(raw: string): string {
-  try {
-    return new URL(raw.includes('://') ? raw : `https://${raw}`).hostname
-  } catch {
-    return ''
-  }
 }

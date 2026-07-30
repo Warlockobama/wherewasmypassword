@@ -113,13 +113,18 @@ export async function loadPracticeMeta(): Promise<PracticeMeta | undefined> {
  * rather than lingering until the next practice unlock.
  */
 export function migratePracticeMeta(stored: PracticeMeta | LegacyPracticeMeta): PracticeMeta {
-  if ('practiceCount' in stored && typeof stored.practiceCount === 'number') {
+  if (
+    'practiceCount' in stored &&
+    typeof stored.practiceCount === 'number' &&
+    (stored.lastPracticedAt === null || typeof stored.lastPracticedAt === 'number')
+  ) {
     return stored
   }
   const legacy = (stored as LegacyPracticeMeta).practicedAt ?? []
+  const partial = stored as Partial<PracticeMeta>
   return {
-    createdAt: stored.createdAt,
-    practiceCount: legacy.length,
+    createdAt: typeof stored.createdAt === 'number' ? stored.createdAt : Date.now(),
+    practiceCount: legacy.length || (typeof partial.practiceCount === 'number' ? partial.practiceCount : 0),
     lastPracticedAt: legacy.length ? legacy.reduce((a, b) => Math.max(a, b)) : null,
   }
 }

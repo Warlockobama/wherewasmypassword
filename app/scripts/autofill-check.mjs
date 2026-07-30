@@ -73,6 +73,9 @@ const HARVEST_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Ar
   <input name="pw8" type="password" style="position:absolute;inset:0;width:200px;height:24px">
   <div style="position:absolute;inset:0;background:#fff"></div>
 </div>
+<input name="pw9" type="password" style="width:200px;height:24px;visibility:hidden">
+<input name="pw10" type="password" readonly style="width:200px;height:24px">
+<div style="visibility:hidden"><input name="pw11" type="password" style="width:200px;height:24px"></div>
 </body></html>`
 
 function startServer() {

@@ -83,34 +83,49 @@
     if (rect.top > viewportHeight + rect.height) return false
     if (rect.left > viewportWidth + rect.width) return false
 
-    // `checkVisibility` accounts for ancestors, which the computed style of
-    // the element alone does not: a wrapper with `opacity: 0` leaves the input
-    // itself computing an opacity of 1.
+    // The element's own computed style first. These run ALWAYS, never as a
+    // fallback: `checkVisibility` below is the newer and broader check, but it
+    // is also the one whose option names changed, and an unknown dictionary
+    // member is silently ignored rather than raising — so a version mismatch
+    // there degrades to checking almost nothing, without saying so.
+    const style = getComputedStyle(el)
+    if (style.display === 'none' || style.visibility === 'hidden') return false
+    if (Number(style.opacity) === 0) return false
+
+    // `checkVisibility` additionally accounts for ANCESTORS, which a computed
+    // style cannot: a wrapper with `opacity: 0` leaves the input itself
+    // computing an opacity of 1. Both spellings are passed because Chromium
+    // 105-124 shipped `checkOpacity`/`checkVisibilityCSS` and 125+ renamed
+    // them; passing only the new names silently disables the check on the old
+    // versions.
     if (typeof el.checkVisibility === 'function') {
-      if (
-        !el.checkVisibility({
-          opacityProperty: true,
-          visibilityProperty: true,
-          contentVisibilityAuto: true,
-        })
-      ) {
-        return false
-      }
-    } else {
-      const style = getComputedStyle(el)
-      if (style.display === 'none' || style.visibility === 'hidden') return false
-      if (Number(style.opacity) === 0) return false
+      const visible = el.checkVisibility({
+        checkOpacity: true,
+        checkVisibilityCSS: true,
+        opacityProperty: true,
+        visibilityProperty: true,
+        contentVisibilityAuto: true,
+      })
+      if (!visible) return false
     }
 
-    // If the field is on screen right now, something else covering it means
+    // If the field is on screen right now, a SIBLING element covering it means
     // the user is not looking at what we are about to fill. Skipped when the
-    // centre is off screen, because a legitimate form below the fold is not
-    // an attack and a hit test there would always fail.
+    // centre is off screen, because a legitimate form below the fold is not an
+    // attack and a hit test there would always fail.
+    //
+    // Ancestors are allowed through: an input clipped by a scrolling wrapper,
+    // or sitting under a transparent container that captures pointer events,
+    // is ordinary page construction and refusing it would just mean "no login
+    // field found" on real sites. Note also that `elementFromPoint` honours
+    // `pointer-events`, so a cover with `pointer-events: none` is not caught —
+    // this is a check against mis-filling, not an anti-harvesting control. The
+    // checks above are what stop harvesting.
     const cx = rect.left + rect.width / 2
     const cy = rect.top + rect.height / 2
     if (cx >= 0 && cy >= 0 && cx <= viewportWidth && cy <= viewportHeight) {
       const topmost = document.elementFromPoint(cx, cy)
-      if (topmost && topmost !== el && !el.contains(topmost)) return false
+      if (topmost && topmost !== el && !el.contains(topmost) && !topmost.contains(el)) return false
     }
     return true
   }

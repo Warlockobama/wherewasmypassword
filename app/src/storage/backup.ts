@@ -4,10 +4,14 @@ import type { StoredVault } from './db.ts'
 const FILE_KIND = 'wherewasmypassword-backup'
 
 /**
- * A base64 field big enough for any real vault and small enough that a hostile
- * file cannot fill the origin's storage quota on restore.
+ * Per-field ceilings. The ciphertext is the only field that is legitimately
+ * large; a salt is 24 base64 characters and an IV is 16, so accepting eight
+ * megabytes of either would be pure indulgence.
  */
-const MAX_FIELD_CHARS = 8 * 1024 * 1024
+const MAX_CHARS = { salt: 128, iv: 64, ciphertext: 8 * 1024 * 1024 }
+
+/** Base64 as `toBase64` emits it. */
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/
 
 export interface BackupFile {
   kind: typeof FILE_KIND
@@ -27,21 +31,39 @@ export function parseBackup(text: string): StoredVault {
   } catch {
     throw new Error('Not a valid backup file (unreadable JSON).')
   }
+  // `JSON.parse('null')` and `JSON.parse('7')` both succeed, and reading
+  // `.kind` off either throws a raw TypeError the user would be shown.
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('Not a Where Was My Password backup file.')
+  }
   const file = parsed as Partial<BackupFile>
   if (file.kind !== FILE_KIND || !file.vault || typeof file.vault !== 'object') {
     throw new Error('Not a Where Was My Password backup file.')
   }
   const v = file.vault
   // Presence is not enough: `salt: {}` or `iv: 7` would sail past a truthiness
-  // check and only blow up later, deep inside the unlock path.
-  const isField = (x: unknown) => typeof x === 'string' && x.length > 0 && x.length <= MAX_FIELD_CHARS
-  if (v.version !== 1 || !isField(v.salt) || !isField(v.iv) || !isField(v.ciphertext)) {
+  // check and only blow up later, deep inside the unlock path — by which point
+  // the restore has already replaced the live vault. Base64 is checked here
+  // for the same reason: `salt: 'not base64!!'` is a string of a sane length
+  // and fails only when `atob` reaches it, one screen too late.
+  const isField = (x: unknown, max: number) =>
+    typeof x === 'string' && x.length > 0 && x.length <= max && BASE64.test(x)
+  if (
+    v.version !== 1 ||
+    !isField(v.salt, MAX_CHARS.salt) ||
+    !isField(v.iv, MAX_CHARS.iv) ||
+    !isField(v.ciphertext, MAX_CHARS.ciphertext)
+  ) {
     throw new Error('Backup file is incomplete or from an unsupported version.')
   }
   if (!kdfParamsAreSupported(v.kdfParams)) {
     throw new Error('Backup file has unsupported key-derivation settings.')
   }
-  const timestamp = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? x : Date.now())
+  // A timestamp far in the future is finite and would push the next practice
+  // reminder past the end of the century, silently retiring the schedule.
+  const now = Date.now()
+  const timestamp = (x: unknown) =>
+    typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= now ? x : now
   // Rebuild the record field by field rather than returning the parsed object:
   // whatever else the file carried does not get persisted to IndexedDB.
   return {

@@ -121,13 +121,17 @@ describe('clipboard auto-clear', () => {
     expect(written).toEqual(['hunter2'])
   })
 
-  it('leaves the clipboard alone if it plainly holds something else', async () => {
+  it('clears without reading the clipboard back first', async () => {
+    // Documenting a deliberate trade-off rather than an oversight: reading the
+    // clipboard needs the `clipboardRead` permission, which this extension
+    // does not request, so a read-back guard would silently never work. The
+    // cost is that content copied in another application can be overwritten.
     const { copyWithAutoClear } = await freshModule()
     await copyWithAutoClear('hunter2')
-    clipboardContents = 'something else entirely'
+    clipboardContents = 'copied in some other app'
 
     await vi.advanceTimersByTimeAsync(CLEAR_DELAY_MS + 10)
-    expect(clipboardContents).toBe('something else entirely')
+    expect(clipboardContents).toBe('')
   })
 
   it('clears immediately when the vault locks with the tab focused', async () => {
@@ -153,6 +157,17 @@ describe('clipboard auto-clear', () => {
     fire('focus')
     await vi.advanceTimersByTimeAsync(0)
     expect(clipboardContents).toBe('')
+  })
+
+  it('a clear already in flight does not wipe a password copied since', async () => {
+    // The window is small but the consequence is silent: the user pastes and
+    // gets nothing, while the UI says a password is on the clipboard.
+    const { copyWithAutoClear, clearClipboardNow } = await freshModule()
+    await copyWithAutoClear('first')
+    const inFlight = clearClipboardNow()
+    await copyWithAutoClear('second')
+    await inFlight
+    expect(clipboardContents).toBe('second')
   })
 
   it('a second copy supersedes the first without clearing the new one', async () => {

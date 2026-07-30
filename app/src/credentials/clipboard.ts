@@ -7,9 +7,11 @@ const CLEAR_DELAY_MS = 30_000
  * hours would otherwise wake with the password still there and 20 seconds
  * left to run.
  */
-let pending: { text: string; deadline: number } | null = null
+let pending: { text: string; deadline: number; generation: number } | null = null
 let timer: ReturnType<typeof setTimeout> | undefined
 let listening = false
+/** Bumped on every copy, so a clear that started earlier can tell it is stale. */
+let generation = 0
 
 /**
  * Copy text to the clipboard and take it off again after 30 seconds.
@@ -24,7 +26,7 @@ let listening = false
  */
 export async function copyWithAutoClear(text: string): Promise<void> {
   await navigator.clipboard.writeText(text)
-  pending = { text, deadline: Date.now() + CLEAR_DELAY_MS }
+  pending = { text, deadline: Date.now() + CLEAR_DELAY_MS, generation: ++generation }
   listen()
   schedule()
 }
@@ -44,12 +46,26 @@ export async function clearClipboardOnLock(): Promise<void> {
   if (!pending) return
   if (typeof document !== 'undefined' && !document.hasFocus()) {
     pending.deadline = Date.now()
+    // Re-arm: the original timer may already have fired and returned, in which
+    // case nothing would be left to try again except a focus event.
+    schedule()
     return
   }
   await clearClipboardNow()
 }
 
-/** Clear now and forget the password, whatever the deadline said. */
+/**
+ * Clear now and forget the password, whatever the deadline said.
+ *
+ * The clipboard is overwritten without first reading it back to confirm it is
+ * still ours. That check is not available: `navigator.clipboard.readText()`
+ * needs the `clipboardRead` permission, which this extension deliberately does
+ * not request — "read data you copy and paste" is a large thing to ask for on
+ * behalf of a password manager. Writing regardless is what other password
+ * managers do, and the alternative is not clearing at all, which is the bug
+ * this whole path exists to fix. A copy the user makes inside our own UI still
+ * cancels the pending clear, via the `copy` listener below.
+ */
 export async function clearClipboardNow(): Promise<void> {
   const current = pending
   pending = null
@@ -57,19 +73,13 @@ export async function clearClipboardNow(): Promise<void> {
   timer = undefined
   if (!current) return
   try {
-    // Leave the clipboard alone if it plainly holds something else now. When
-    // the read is refused — no focus, no permission — clearing is still the
-    // right default for a password manager, and a copy made from our own UI
-    // has already cancelled the pending clear via the `copy` listener below.
-    let holdsOurs = true
-    try {
-      holdsOurs = (await navigator.clipboard.readText()) === current.text
-    } catch {
-      holdsOurs = true
-    }
-    if (holdsOurs) await navigator.clipboard.writeText('')
+    // A newer copy may have landed while an earlier clear was in flight;
+    // blanking the clipboard then would take the password the user is about
+    // to paste.
+    if (current.generation !== generation) return
+    await navigator.clipboard.writeText('')
   } catch {
-    // Nothing further we can do; the next focus will try again if still armed.
+    // Refused — no focus, most likely. The next focus tries again if armed.
   }
 }
 

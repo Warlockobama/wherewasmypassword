@@ -188,7 +188,58 @@ a broken feature.
   whatever page happened to be active by the time it arrived; it now carries
   the origin the user was actually shown.
 
+### Third pass: the second pass reviewed adversarially in turn
+
+The fixes above were then handed to a reviewer told to find what was wrong with
+them, which was worth doing — it found a regression the fixes had introduced
+and several holes in them.
+
+- **The visibility hardening broke itself on older browsers.** `checkVisibility`
+  renamed its options in Chromium 125, and an unrecognised option is silently
+  ignored rather than raising. Because the old computed-style checks had been
+  moved into an `else`, Chromium 105–124 ended up checking *less* than before:
+  `opacity: 0` and `visibility: hidden` password fields became fillable. Both
+  option spellings are now passed, and the computed-style checks always run.
+- **The re-roll budget could be laundered.** The per-word history was trimmed
+  to the current word count, so re-rolling the seventh and eighth words and
+  then dropping back to six refunded the charge — cycling the count gave
+  unlimited re-rolls. The history is now kept at full length and spending only
+  goes up.
+- **The clipboard "is it still ours?" check was dead code.** Reading the
+  clipboard needs the `clipboardRead` permission, which this extension does not
+  request, so the read always failed and the code always cleared anyway. That
+  behaviour is kept — it is what other password managers do, and the
+  alternative is not clearing at all — but it is now stated rather than
+  disguised, and a generation counter stops a clear already in flight from
+  wiping a password copied since.
+- **A bad backup file still destroyed the live vault before failing.** Fields
+  were checked for type and size but not for being base64, so `salt: 'not
+  base64!!'` passed, the restore committed, and `atob` threw at the next
+  unlock. Base64 and per-field size limits are checked up front, timestamps
+  are range-checked rather than merely finite, and `parseBackup('null')` no
+  longer throws a raw TypeError at the user.
+- **The toolbar-click fix could open a duplicate tab anyway** if focusing the
+  window failed, and its exact-match URL filter would have missed a UI document
+  carrying any query string.
+- **Smaller:** the occlusion test rejected legitimate fields under scrolling or
+  transparent ancestors; `onLock={lock}` passed React's event object as the
+  "broadcast" flag; the delete-vault path did not clear the clipboard; the
+  practice schedule returned `NaN` for a record with a non-numeric date;
+  `urlMatches` and `credentialOrigin` disagreed about what counts as the same
+  site.
+- **Three tests were vacuous or tautological** and have been replaced with ones
+  that fail when the fix is reverted, plus new coverage for the clipboard state
+  machine (nine tests across the away-and-return sequence), the practice-record
+  rewrite actually removing the timeline from disk, and the budget's
+  monotonicity.
+
 ### Still open
 
 `0009`, now four items: ciphertext padding, header binding, the KDF upgrade
 path, popup-versus-tab, and the missing change-passphrase path.
+
+Known and accepted rather than fixed: closing the tab within 30 seconds of a
+Copy leaves the password on the system clipboard (nothing survives the page to
+clear it — the UI says "cleared 30s after you return here" and means it), the
+re-roll budget resets if the page is reloaded mid-onboarding, and the OS
+clipboard history keeps its own copy regardless.
