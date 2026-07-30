@@ -89,3 +89,10 @@ The same `dist/` also works as a plain static site on any host; the extension wr
 `public/manifest.json` + `public/background.js`. Vault data lives in the extension's own
 IndexedDB, so the web version and extension version have separate vaults — use the
 encrypted backup export/import to move between them.
+
+**The hosted build is meaningfully weaker than the extension, and not just because it
+lacks autofill.** An extension page runs in its own origin with its own isolated world;
+a hosted page shares an origin with whatever else that host serves, so a single XSS or a
+compromised host yields the master passphrase itself, not just today's passwords. The
+`<meta>` CSP also cannot carry `frame-ancestors` — send it as a real HTTP header if you
+host this. Prefer the extension.
