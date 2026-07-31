@@ -36,7 +36,13 @@ const baseStored: StoredVault = {
 }
 
 const readBack = (record: StoredVault) =>
-  decryptVault(key, { iv: fromBase64(record.iv), ciphertext: fromBase64(record.ciphertext) })
+  decryptVault(
+    key,
+    { iv: fromBase64(record.iv), ciphertext: fromBase64(record.ciphertext) },
+    // Read with the header that was written beside it — which is the point of
+    // binding it: a record whose header and ciphertext disagree does not open.
+    record,
+  )
 
 const fields = {
   label: 'Example',
@@ -71,6 +77,19 @@ describe('credential persistence', () => {
     expect(stored.salt).toBe(baseStored.salt)
     expect(stored.kdfParams).toEqual(baseStored.kdfParams)
     expect(stored.createdAt).toBe(baseStored.createdAt)
+  })
+
+  it('upgrades a format-1 record to the current format on the first save', async () => {
+    // `baseStored` is a pre-padding, pre-header-binding vault. Saving anything
+    // at all has to bring it forward, or a vault whose owner never changes
+    // their passphrase would keep leaking its plaintext length forever.
+    expect(baseStored.version).toBe(1)
+    const [, stored] = await addCredential(key, baseData, baseStored, fields)
+    expect(stored.version).toBe(2)
+    // And it is genuinely the new format: padded to a whole 4 KiB block, plus
+    // the 16-byte GCM tag.
+    expect(fromBase64(stored.ciphertext).length).toBe(4096 + 16)
+    expect((await readBack(stored)).entries).toHaveLength(1)
   })
 
   it('uses a fresh IV on every save', async () => {

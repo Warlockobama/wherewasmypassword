@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { generateSitePassword } from './generate-password.ts'
 import { newCredentialId } from './credential-id.ts'
-import { urlMatches, credentialOrigin, canonicalHost } from './match-url.ts'
+import {
+  urlMatches,
+  credentialOrigin,
+  canonicalHost,
+  fillablePageOrigin,
+} from './match-url.ts'
 
 describe('generateSitePassword', () => {
   it('produces a string of the requested length', () => {
@@ -114,5 +119,39 @@ describe('canonicalHost', () => {
     expect(canonicalHost('example.com')).toBe('example.com')
     expect(canonicalHost('wwwexample.com')).toBe('wwwexample.com')
     expect(canonicalHost('accounts.example.com')).toBe('accounts.example.com')
+  })
+})
+
+describe('fillablePageOrigin', () => {
+  it('accepts http(s) pages and canonicalises them exactly like a stored URL', () => {
+    expect(fillablePageOrigin('https://www.example.com/login?next=/x')).toEqual({
+      origin: 'https://example.com',
+      host: 'example.com',
+    })
+    // http is not refused: a router admin page or a local test server is a
+    // legitimate login page, and the origin check still pins the scheme.
+    expect(fillablePageOrigin('http://127.0.0.1:5189/login')).toEqual({
+      origin: 'http://127.0.0.1:5189',
+      host: '127.0.0.1',
+    })
+    // The two sides of the origin check must never disagree about a page.
+    expect(fillablePageOrigin('https://www.example.com/login')?.origin).toBe(
+      credentialOrigin('https://example.com'),
+    )
+  })
+
+  it('refuses everything that is not a web page', () => {
+    // `new URL('chrome://settings').origin` is the STRING "null", which would
+    // otherwise sail through an equality check against a credential saved with
+    // no site at all.
+    expect(fillablePageOrigin('chrome://settings')).toBeNull()
+    expect(fillablePageOrigin('about:blank')).toBeNull()
+    expect(fillablePageOrigin('file:///C:/secrets.html')).toBeNull()
+    expect(fillablePageOrigin('chrome-extension://abcdefghijklmnop/index.html')).toBeNull()
+    expect(fillablePageOrigin('javascript:alert(1)')).toBeNull()
+    expect(fillablePageOrigin('not a url')).toBeNull()
+    expect(fillablePageOrigin('')).toBeNull()
+    // What `tabs.query` returns when the activeTab grant never arrived.
+    expect(fillablePageOrigin(undefined)).toBeNull()
   })
 })

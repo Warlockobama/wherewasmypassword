@@ -1,6 +1,6 @@
 # 0012 — There is no way to change the master passphrase
 
-**Status:** OPEN — split out of `0009`.
+**Status:** RESOLVED (user call, 2026-07-31) — see the resolution at the bottom.
 
 ## The problem
 
@@ -44,3 +44,37 @@ a clear warning.
 ## Acceptance criteria for resuming
 
 A yes/no on implementing it, plus the sub-question if the answer is yes.
+
+## RESOLUTION (user call, 2026-07-31 — via exec assistant)
+
+1. **Implement master passphrase change and KDF upgrade together**: James said "go with the recommendation." Implement a change-passphrase feature that re-encrypts the vault with a fresh salt and current KDF parameters, and include the related KDF upgrade path from decision 0013 since it shares the same code path.
+2. **Handle training and placement safely**: Changing the phrase invalidates prior memory-house placement and training. Force placement and practice for the new phrase, while allowing a skip with a clear warning.
+3. **Security-sensitive handling**: Treat this as security-sensitive work; ensure appropriate review and tests before release.
+
+## Implemented (2026-07-31)
+
+"Change passphrase" sits in Housekeeping on the unlocked screen and runs as its
+own flow (`app/src/vault/ChangePassphrase.tsx`):
+
+1. **Confirm the current phrase.** The vault is already open so this proves
+   nothing to the cryptography — it is there for whoever walks up to an
+   unattended unlocked screen, for whom this would otherwise be a one-click way
+   to lock the owner out forever. Compared in constant time against the key in
+   memory.
+2. **Generate and place.** The full `PhraseGenerator` and `PlacementJourney`,
+   as at first run. Placement is not skippable.
+3. **The gate.** The practice walks and mastery test are offered, and *can* be
+   skipped as the resolution allows — behind a plain warning that the only copy
+   of the new phrase is the one on screen and there is no recovery.
+4. **Re-key.** The same `rekeyVault` as `0013`: new salt, current parameters,
+   the whole vault re-encrypted. Entries come across untouched; the vault keeps
+   its birthday; the practice schedule restarts at day one.
+
+Two things the flow does that were not in the question. It **deletes the
+archived `previous` vault**, which is still encrypted under the phrase being
+retired — leaving it would hand anyone with the profile directory exactly the
+vault the user was moving away from, which defeats the remediation case from
+`0008`. And it says plainly, on the way in and on the way out, that **backup
+files exported earlier still open with the old phrase**: they are separate
+copies this cannot reach, and someone changing their phrase because it may be
+known needs to hear that rather than assume otherwise.

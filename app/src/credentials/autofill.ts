@@ -11,6 +11,13 @@ export interface AutofillResult {
 export interface AutofillRequest {
   username: string
   password: string
+  /**
+   * The tab to fill. The popup resolves this once, up front, and shows the user
+   * its origin — so the fill lands in the page they were told about rather than
+   * in whatever happens to be active a few seconds later. Omitted by callers
+   * that have no tab in hand, which falls back to the active tab.
+   */
+  tabId?: number
   /** Origin of the stored credential; the page must match it to be filled. */
   expectedOrigin?: string
   /**

@@ -8,6 +8,7 @@ import MasteryTest from './training/MasteryTest.tsx'
 import CreateVault from './vault/CreateVault.tsx'
 import LockScreen from './vault/LockScreen.tsx'
 import UnlockedHome from './vault/UnlockedHome.tsx'
+import ChangePassphrase from './vault/ChangePassphrase.tsx'
 import type { Association, VaultData } from './crypto/vault.ts'
 import { randomInt } from './crypto/random.ts'
 import { clearClipboardOnLock } from './credentials/clipboard.ts'
@@ -15,11 +16,11 @@ import {
   freshPracticeMeta,
   loadPracticeMeta,
   loadVault,
-  savePracticeMeta,
   type PracticeMeta,
   type StoredVault,
 } from './storage/db.ts'
 import { daysUntilPractice, isPracticeDue } from './srs/schedule.ts'
+import { recordPracticeUnlock } from './srs/practice.ts'
 
 type Phase =
   | 'loading'
@@ -34,6 +35,7 @@ type Phase =
   | 'create'
   | 'locked'
   | 'unlocked'
+  | 'change-passphrase'
 
 const AUTO_LOCK_MS = 5 * 60 * 1000
 const HIDDEN_LOCK_MS = 60 * 1000
@@ -68,6 +70,10 @@ export default function App() {
   const [stored, setStored] = useState<StoredVault | null>(null)
   const [meta, setMeta] = useState<PracticeMeta | null>(null)
   const [unlocked, setUnlocked] = useState<{ rawKey: Uint8Array; data: VaultData } | null>(null)
+  // True when the unlock that opened this session also brought the vault up to
+  // the current key-derivation settings or vault format, so the UI can say so
+  // once rather than leaving it silent (`decisions/0013`).
+  const [resealed, setResealed] = useState(false)
   const lockTimer = useRef<number | undefined>(undefined)
 
   useEffect(() => {
@@ -98,10 +104,19 @@ export default function App() {
     setPhase('locked')
   }
 
+  // Every phase that holds a derived key in memory. Changing the passphrase is
+  // one of them — it walks through placement and quizzes with the old vault
+  // still open — so it has to be under the same timers rather than a quiet
+  // window where the vault stays unlocked for as long as the flow is on screen.
+  const holdingKey = phase === 'unlocked' || phase === 'change-passphrase'
+
   // Auto-lock: idle timeout while unlocked; a shorter fuse while the tab is
   // hidden (a quick tab switch shouldn't force a full re-derive).
   useEffect(() => {
-    if (phase !== 'unlocked') return
+    // Keyed on `holdingKey` rather than on `phase`: stepping into the change-
+    // passphrase flow and back out must not re-mount this and hand the session
+    // a fresh 30 minutes each time.
+    if (!holdingKey) return
     let hiddenTimer: number | undefined
 
     // Deadlines in wall-clock time, not timer durations. A suspended machine
@@ -174,17 +189,12 @@ export default function App() {
       window.removeEventListener('pagehide', onPageHide)
       lockChannel?.removeEventListener('message', onRemoteLock)
     }
-  }, [phase])
+  }, [holdingKey])
 
   const recordPractice = async () => {
-    const current = meta ?? freshPracticeMeta(Date.now())
-    const next = {
-      ...current,
-      practiceCount: current.practiceCount + 1,
-      lastPracticedAt: Date.now(),
-    }
-    setMeta(next)
-    await savePracticeMeta(next)
+    // Shared with the toolbar popup, which unlocks the same vault and counts
+    // for the same schedule.
+    setMeta(await recordPracticeUnlock())
   }
 
   switch (phase) {
@@ -297,8 +307,13 @@ export default function App() {
         <LockScreen
           stored={stored}
           practiceDue={meta ? isPracticeDue(meta.createdAt, meta) : false}
-          onUnlock={(rawKey, data) => {
+          onUnlock={(rawKey, data, currentStored, resealed) => {
             void recordPractice()
+            // An old vault may have been re-keyed on the way in, which replaces
+            // the salt and the record; carry the new one or the next save would
+            // write the vault back out under the settings it just left.
+            setStored(currentStored)
+            setResealed(resealed)
             setUnlocked({ rawKey, data })
             setPhase('unlocked')
           }}
@@ -315,9 +330,11 @@ export default function App() {
           stored={stored}
           rawKey={unlocked.rawKey}
           daysUntilPractice={meta ? daysUntilPractice(meta.createdAt, meta) : 0}
+          resealed={resealed}
           // Wrapped, not passed directly: React hands the click event to the
           // first parameter, which is `broadcast`.
           onLock={() => lock()}
+          onChangePassphrase={() => setPhase('change-passphrase')}
           onDeleted={() => {
             // Same key hygiene as lock(): dropping the reference is not enough.
             unlocked.rawKey.fill(0)
@@ -330,6 +347,24 @@ export default function App() {
           onVaultChanged={(nextData, nextStored) => {
             setUnlocked({ rawKey: unlocked.rawKey, data: nextData })
             setStored(nextStored)
+          }}
+        />
+      ) : null
+    case 'change-passphrase':
+      return unlocked && stored ? (
+        <ChangePassphrase
+          data={unlocked.data}
+          stored={stored}
+          rawKey={unlocked.rawKey}
+          onCancel={() => setPhase('unlocked')}
+          onDone={(nextKey, nextData, nextStored) => {
+            setUnlocked({ rawKey: nextKey, data: nextData })
+            setStored(nextStored)
+            setMeta(freshPracticeMeta(Date.now()))
+            // The note belongs to the unlock that re-keyed the vault, not to a
+            // change the user just watched happen on screen.
+            setResealed(false)
+            setPhase('unlocked')
           }}
         />
       ) : null

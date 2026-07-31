@@ -1,10 +1,12 @@
 import { openDB, type DBSchema } from 'idb'
 import type { KdfParams } from '../crypto/kdf.ts'
+import type { VaultFormatVersion } from '../crypto/vault.ts'
 
 /** Everything in this record is safe to store in plaintext: ciphertext,
  *  salt, and KDF params reveal nothing without the passphrase. */
 export interface StoredVault {
-  version: 1
+  /** On-disk format; see `VaultFormatVersion`. Old vaults are still readable. */
+  version: VaultFormatVersion
   salt: string // base64
   kdfParams: KdfParams
   iv: string // base64
@@ -78,6 +80,18 @@ export async function archiveCurrentVault(): Promise<void> {
 
 export async function loadArchivedVault(): Promise<StoredVault | undefined> {
   return (await db()).get('vault', PREVIOUS_VAULT_KEY)
+}
+
+/**
+ * Drop the archived copy.
+ *
+ * Changing the master passphrase is the one operation where keeping it would
+ * defeat the point: the archive is still encrypted under the *old* phrase, so
+ * leaving it on disk after a phrase has been burned hands an attacker with the
+ * profile directory exactly the vault the user was trying to retire.
+ */
+export async function deleteArchivedVault(): Promise<void> {
+  await (await db()).delete('vault', PREVIOUS_VAULT_KEY)
 }
 
 export async function loadVault(): Promise<StoredVault | undefined> {

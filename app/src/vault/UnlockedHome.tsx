@@ -21,17 +21,22 @@ export default function UnlockedHome({
   stored,
   rawKey,
   daysUntilPractice,
+  resealed,
   onLock,
   onDeleted,
   onVaultChanged,
+  onChangePassphrase,
 }: {
   data: VaultData
   stored: StoredVault
   rawKey: Uint8Array
   daysUntilPractice: number
+  /** This unlock also re-encrypted the vault to current settings. */
+  resealed: boolean
   onLock: () => void
   onDeleted: () => void
   onVaultChanged: (data: VaultData, stored: StoredVault) => void
+  onChangePassphrase: () => void
 }) {
   const [walking, setWalking] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
@@ -126,6 +131,16 @@ export default function UnlockedHome({
         {daysUntilPractice === 0 ? 'today' : `in ${daysUntilPractice} day${daysUntilPractice === 1 ? '' : 's'}`}
       </p>
 
+      {/* Silent re-encryption would be the wrong kind of quiet: the vault on
+          disk is not the file it was a minute ago, and anyone keeping backups
+          should know a fresh one is worth taking. */}
+      {resealed && (
+        <p className="w-full rounded-lg border-2 border-sage/50 bg-sage/10 p-2 text-center text-sm text-dusk/80">
+          This vault was re-encrypted with stronger settings as you unlocked it. Nothing inside
+          changed — but an older backup file still uses the older ones.
+        </p>
+      )}
+
       <Panel className="w-full space-y-3">
         <h2 className="font-display text-lg text-dusk">Keep the phrase alive</h2>
         <p className="text-sm text-dusk/80">
@@ -153,7 +168,7 @@ export default function UnlockedHome({
         </div>
         <p className="text-sm text-dusk/80">
           {isExtensionContext()
-            ? 'Autofill types a password straight into the login page, so it never touches the clipboard. Copy is the fallback: it is cleared 30 seconds after you come back to this tab, though your operating system may keep its own clipboard history.'
+            ? 'To fill a login page, go to it and click the Where Was My Password button in the toolbar: the popup there types the password straight into the page, so it never touches the clipboard. Copy is the fallback — it is cleared 30 seconds after you come back to this tab, though your operating system may keep its own clipboard history.'
             : 'Copy puts a password on the clipboard and clears it 30 seconds after you return to this tab — your operating system may still keep a clipboard history of its own. Install the browser extension for autofill that skips the clipboard entirely.'}
         </p>
         <CredentialList
@@ -196,6 +211,9 @@ export default function UnlockedHome({
           </Button>
           <Button variant="secondary" onClick={onLock}>
             Lock now
+          </Button>
+          <Button variant="secondary" onClick={onChangePassphrase}>
+            Change passphrase
           </Button>
         </div>
         {!confirmingDelete ? (

@@ -48,8 +48,12 @@ export function parseBackup(text: string): StoredVault {
   // and fails only when `atob` reaches it, one screen too late.
   const isField = (x: unknown, max: number) =>
     typeof x === 'string' && x.length > 0 && x.length <= max && BASE64.test(x)
+  // Both formats are accepted and the version is carried through unchanged: a
+  // format-1 file has to keep saying 1, because that is what tells the unlock
+  // path to decrypt it without the padding and header binding it was written
+  // without. Restoring one and then saving upgrades it in place.
   if (
-    v.version !== 1 ||
+    (v.version !== 1 && v.version !== 2) ||
     !isField(v.salt, MAX_CHARS.salt) ||
     !isField(v.iv, MAX_CHARS.iv) ||
     !isField(v.ciphertext, MAX_CHARS.ciphertext)
@@ -67,7 +71,7 @@ export function parseBackup(text: string): StoredVault {
   // Rebuild the record field by field rather than returning the parsed object:
   // whatever else the file carried does not get persisted to IndexedDB.
   return {
-    version: 1,
+    version: v.version,
     salt: v.salt,
     iv: v.iv,
     ciphertext: v.ciphertext,

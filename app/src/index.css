@@ -15,6 +15,20 @@ html, body, #root {
   height: 100%;
 }
 
+/* The toolbar popup is a panel, not a page: the browser sizes its window to the
+   document, so a full-height layout would collapse to nothing. Fixed width,
+   height from the content, and a ceiling — Chromium will not draw a popup taller
+   than 600px and simply clips whatever runs past it. */
+html.popup, html.popup body, html.popup #root {
+  height: auto;
+}
+
+html.popup {
+  width: 340px;
+  max-height: 580px;
+  overflow-y: auto;
+}
+
 html {
   /* Stop mobile browsers inflating text when the page is used in landscape. */
   -webkit-text-size-adjust: 100%;

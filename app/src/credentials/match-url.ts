@@ -38,3 +38,25 @@ export function credentialOrigin(storedUrl: string): string {
 export function canonicalHost(hostname: string): string {
   return hostname.replace(/^www\./i, '')
 }
+
+/**
+ * The origin of a page autofill could actually target, or null.
+ *
+ * Only `http(s)` qualifies. `chrome://`, `about:`, `file://`, PDF viewers and
+ * the extension's own pages are either unscriptable or must never be filled,
+ * and several of them do not even have a real origin — `new URL('chrome://x').origin`
+ * is the string `"null"`, which would otherwise sail through an equality check
+ * against a credential saved with no site.
+ */
+export function fillablePageOrigin(rawUrl: string | undefined): { origin: string; host: string } | null {
+  if (!rawUrl) return null
+  let url: URL
+  try {
+    url = new URL(rawUrl)
+  } catch {
+    return null
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+  url.hostname = canonicalHost(url.hostname)
+  return { origin: url.origin, host: url.hostname }
+}

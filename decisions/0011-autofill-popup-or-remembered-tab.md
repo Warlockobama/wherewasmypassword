@@ -1,6 +1,6 @@
 # 0011 — Autofill is broken: popup, remembered tab, or drop it
 
-**Status:** OPEN — highest priority of the four open calls. Split out of `0009`.
+**Status:** RESOLVED (user call, 2026-07-31) — see the resolution at the bottom.
 
 ## The problem, confirmed in a real browser
 
@@ -50,3 +50,40 @@ recommended**: it works against the local-only, minimal-permission posture.
 Any one of the three answers unblocks the work immediately; option 2 could
 ship the same day, option 1 in a day or so. The autofill test already exists
 and will verify whichever path is chosen.
+
+## RESOLUTION (user call, 2026-07-31 — via exec assistant)
+
+1. **Ship the compact popup flow**: James chose the recommended default, saying "let’s go with the recommendation." Implement a compact popup for unlock, search, and fill, and keep the full tab for training and walkthroughs.
+2. **Align permissions and intent**: Ensure the popup flow aligns the permission grant with the active tab and the user’s target page, avoiding broad host permissions.
+3. **Verify with the existing test**: Use the existing autofill test to confirm the chosen path works end-to-end before release.
+
+## IMPLEMENTED (2026-07-31)
+
+Built as ruled. `action.default_popup` now points the toolbar button at a compact
+`popup.html` — unlock, search, fill — and the memory house stays a full tab,
+opened from a link in the popup (with `default_popup` set, `action.onClicked`
+can never fire, so the worker gained a `wwmp-open-app` message and lost its click
+handler). The popup resolves the target tab once, shows the user its origin, and
+sends that tab id with the fill, so the password lands in the page they were told
+about rather than in whatever is active a moment later. Permissions are unchanged
+and unbroadened: still `activeTab` + `scripting`, no host permissions — ruling 2.
+
+The full tab's Autofill button is gone rather than left failing: that tab is the
+active tab whenever it is on screen, so a fill from there has nowhere to go. Copy
+stays there as the fallback.
+
+`npm run autofill` is green — 29 checks — and now fails the build if it is not.
+One caveat, measured rather than assumed, and written up in the README: no script
+can produce the `activeTab` grant, because the browser confers it on its own
+action-invocation path. `chrome.action.openPopup()` opens the real popup but
+grants nothing; synthesised keystrokes never reach the command dispatcher; a
+pre-seeded profile is discarded for an unpacked extension. So pass 1 checks
+everything reachable without the grant (including the headline one: the popup
+points at the login tab, not at our own UI) and pass 2 runs the same shipped
+popup, worker and content script through every fill and origin check with a host
+permission standing in for the grant. The README carries the one manual click
+that closes the gap; the popup naming the site is itself proof the grant arrived,
+since the URL is unreadable without it.
+
+Two follow-on questions the build surfaced are parked in `0015` — whether the
+popup may inherit an unlocked session, and whether it should offer Copy.

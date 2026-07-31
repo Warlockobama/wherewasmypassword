@@ -11,14 +11,22 @@ import {
   rerollCostBits,
   rerollWord,
 } from './wordlist.ts'
-import { DEFAULT_KDF_PARAMS, deriveKey, kdfParamsAreSupported, type KdfParams } from './kdf.ts'
 import {
+  DEFAULT_KDF_PARAMS,
+  deriveKey,
+  kdfParamsAreOutdated,
+  kdfParamsAreSupported,
+  type KdfParams,
+} from './kdf.ts'
+import {
+  PAD_BLOCK_BYTES,
   decryptVault,
   encryptVault,
   fromBase64,
   toBase64,
   WrongPassphraseError,
   type VaultData,
+  type VaultHeader,
 } from './vault.ts'
 import { parseBackup, serializeBackup } from '../storage/backup.ts'
 import { migratePracticeMeta, type StoredVault } from '../storage/db.ts'
@@ -207,41 +215,93 @@ describe('kdf', () => {
     expect(kdfParamsAreSupported({ ...DEFAULT_KDF_PARAMS, memoryKiB: 4 * 1024 })).toBe(false)
     expect(kdfParamsAreSupported(undefined)).toBe(false)
   })
+
+  it('defaults to 256 MiB of Argon2id memory (decisions/0013)', () => {
+    // Pinned rather than left to drift: this number is the cost an offline
+    // attacker pays per guess, and lowering it is the kind of change that
+    // should have to argue with a test first.
+    expect(DEFAULT_KDF_PARAMS.memoryKiB).toBe(256 * 1024)
+    expect(DEFAULT_KDF_PARAMS.iterations).toBeGreaterThanOrEqual(3)
+    expect(DEFAULT_KDF_PARAMS.algorithm).toBe('argon2id')
+  })
+
+  it('knows which stored parameters are behind the current defaults', () => {
+    expect(kdfParamsAreOutdated(DEFAULT_KDF_PARAMS)).toBe(false)
+    // Every vault created before this change.
+    expect(kdfParamsAreOutdated({ ...DEFAULT_KDF_PARAMS, memoryKiB: 64 * 1024 })).toBe(true)
+    expect(kdfParamsAreOutdated({ ...DEFAULT_KDF_PARAMS, iterations: 2 })).toBe(true)
+    // Stronger than today's defaults is not "outdated": a vault must never be
+    // dragged *down* to them.
+    expect(kdfParamsAreOutdated({ ...DEFAULT_KDF_PARAMS, memoryKiB: 512 * 1024 })).toBe(false)
+    expect(kdfParamsAreOutdated({ ...DEFAULT_KDF_PARAMS, iterations: 5 })).toBe(false)
+    // Parallelism is a shape choice, not a strength one — not worth a re-key.
+    expect(kdfParamsAreOutdated({ ...DEFAULT_KDF_PARAMS, parallelism: 2 })).toBe(false)
+  })
 })
 
 describe('vault encryption', () => {
   const key = new Uint8Array(32).fill(1)
   const wrongKey = new Uint8Array(32).fill(2)
 
+  /** The header a vault written today is bound to. */
+  const writeHeader = { salt: 'c2FsdGVkc2FsdGVk', kdfParams: TEST_KDF }
+  const readHeader: VaultHeader = { version: 2, ...writeHeader }
+  /** The same vault as it was stored before `decisions/0014`. */
+  const legacyHeader: VaultHeader = { version: 1, ...writeHeader }
+
+  /**
+   * Write plaintext the way format 1 did — no padding, no bound header — so the
+   * migration path is tested against the real old bytes rather than a
+   * reimplementation of it.
+   */
+  const encryptLegacy = async (rawKey: Uint8Array, json: string) => {
+    const iv = new Uint8Array(12).fill(3)
+    const subtle = await crypto.subtle.importKey(
+      'raw',
+      rawKey as BufferSource,
+      'AES-GCM',
+      false,
+      ['encrypt'],
+    )
+    const ciphertext = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv },
+      subtle,
+      new TextEncoder().encode(json),
+    )
+    return { iv, ciphertext: new Uint8Array(ciphertext) }
+  }
+
   it('round-trips vault data', async () => {
-    const blob = await encryptVault(key, sampleVault)
-    const decrypted = await decryptVault(key, blob)
+    const blob = await encryptVault(key, sampleVault, writeHeader)
+    const decrypted = await decryptVault(key, blob, readHeader)
     expect(decrypted).toEqual(sampleVault)
   })
 
-  it('backfills entries when decrypting a pre-v2 vault that lacks the field', async () => {
+  it('backfills entries when decrypting a vault that lacks the field', async () => {
     const { entries: _omitted, ...legacyVault } = sampleVault
-    const blob = await encryptVault(key, legacyVault as VaultData)
-    const decrypted = await decryptVault(key, blob)
+    const blob = await encryptVault(key, legacyVault as VaultData, writeHeader)
+    const decrypted = await decryptVault(key, blob, readHeader)
     expect(decrypted.entries).toEqual([])
     expect(decrypted.words).toEqual(sampleVault.words)
   })
 
   it('rejects the wrong key with WrongPassphraseError', async () => {
-    const blob = await encryptVault(key, sampleVault)
-    await expect(decryptVault(wrongKey, blob)).rejects.toBeInstanceOf(WrongPassphraseError)
+    const blob = await encryptVault(key, sampleVault, writeHeader)
+    await expect(decryptVault(wrongKey, blob, readHeader)).rejects.toBeInstanceOf(
+      WrongPassphraseError,
+    )
   })
 
   it('rejects tampered ciphertext', async () => {
-    const blob = await encryptVault(key, sampleVault)
+    const blob = await encryptVault(key, sampleVault, writeHeader)
     blob.ciphertext[5] ^= 0xff
-    await expect(decryptVault(key, blob)).rejects.toBeInstanceOf(WrongPassphraseError)
+    await expect(decryptVault(key, blob, readHeader)).rejects.toBeInstanceOf(WrongPassphraseError)
   })
 
   it('never reuses an IV across saves', async () => {
     const ivs = new Set<string>()
     for (let i = 0; i < 20; i++) {
-      const blob = await encryptVault(key, sampleVault)
+      const blob = await encryptVault(key, sampleVault, writeHeader)
       ivs.add(toBase64(blob.iv))
     }
     expect(ivs.size).toBe(20)
@@ -258,8 +318,8 @@ describe('vault encryption', () => {
     // distinguishes real encryption here is that two encryptions of identical
     // input share no structure, and that the output is not the plaintext length
     // plus a fixed constant in some recognisable encoding.
-    const a = await encryptVault(key, sampleVault)
-    const b = await encryptVault(key, sampleVault)
+    const a = await encryptVault(key, sampleVault, writeHeader)
+    const b = await encryptVault(key, sampleVault, writeHeader)
     expect(toBase64(a.ciphertext)).not.toBe(toBase64(b.ciphertext))
     let agreeing = 0
     for (let i = 0; i < a.ciphertext.length; i++) {
@@ -272,42 +332,155 @@ describe('vault encryption', () => {
   it('reports a damaged vault as damaged rather than as a wrong passphrase', async () => {
     // Authentic plaintext that is not a vault means corruption, and the user
     // should not be told to go and re-walk their memory house over it.
-    const key2 = new Uint8Array(32).fill(9)
-    const iv = new Uint8Array(12).fill(3)
-    const subtle = await crypto.subtle.importKey('raw', key2, 'AES-GCM', false, ['encrypt'])
-    const junk = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      subtle,
-      new TextEncoder().encode('{ this is not json'),
-    )
     await expect(
-      decryptVault(key2, { iv, ciphertext: new Uint8Array(junk) }),
+      decryptVault(key, await encryptLegacy(key, '{ this is not json'), legacyHeader),
     ).rejects.toThrow(/damaged/i)
 
     // Authentic plaintext that parses but is not a vault: the shape check,
     // not the JSON parser, is what has to catch this one.
-    const notAVault = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      subtle,
-      new TextEncoder().encode('{"version":1,"words":"not an array"}'),
-    )
+    const notAVault = JSON.parse('{"version":1,"words":"not an array"}') as VaultData
     await expect(
-      decryptVault(key2, { iv, ciphertext: new Uint8Array(notAVault) }),
+      decryptVault(key, await encryptVault(key, notAVault, writeHeader), readHeader),
     ).rejects.toThrow(/damaged/i)
   })
 
   it('backfills associations as well as entries when they are missing', async () => {
-    const iv = new Uint8Array(12).fill(5)
-    const key3 = new Uint8Array(32).fill(6)
-    const subtle = await crypto.subtle.importKey('raw', key3, 'AES-GCM', false, ['encrypt'])
-    const sparse = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      subtle,
-      new TextEncoder().encode('{"version":1,"words":["a","b"],"createdAt":1}'),
+    const sparse = JSON.parse('{"version":1,"words":["a","b"],"createdAt":1}') as VaultData
+    const data = await decryptVault(
+      key,
+      await encryptVault(key, sparse, writeHeader),
+      readHeader,
     )
-    const data = await decryptVault(key3, { iv, ciphertext: new Uint8Array(sparse) })
     expect(data.associations).toEqual([])
     expect(data.entries).toEqual([])
+  })
+})
+
+describe('vault padding and header binding (decisions/0014)', () => {
+  const key = new Uint8Array(32).fill(1)
+  const writeHeader = { salt: 'c2FsdGVkc2FsdGVk', kdfParams: TEST_KDF }
+  const readHeader: VaultHeader = { version: 2, ...writeHeader }
+  const GCM_TAG_BYTES = 16
+
+  const withEntries = (n: number): VaultData => ({
+    ...sampleVault,
+    entries: Array.from({ length: n }, (_, i) => ({
+      id: `id-${i}`,
+      label: `Site ${i}`,
+      url: `https://site${i}.example`,
+      username: `user${i}`,
+      password: `password-${i}`,
+      notes: '',
+      createdAt: 1700000000000,
+      updatedAt: 1700000000000,
+    })),
+  })
+
+  it('pads every vault to a whole number of 4 KiB blocks', async () => {
+    for (const count of [0, 1, 5]) {
+      const blob = await encryptVault(key, withEntries(count), writeHeader)
+      expect((blob.ciphertext.length - GCM_TAG_BYTES) % PAD_BLOCK_BYTES).toBe(0)
+    }
+  })
+
+  it('hides the length of a newly added password, which is the actual leak', async () => {
+    // The attack in `decisions/0014` is two snapshots of the stored record: an
+    // unpadded vault grows by exactly the length of whatever was added, which
+    // shrinks the search space against that one site. Same block count before
+    // and after is what closes it.
+    const before = await encryptVault(key, withEntries(1), writeHeader)
+    const after = await encryptVault(
+      key,
+      {
+        ...withEntries(1),
+        entries: [
+          ...withEntries(1).entries,
+          {
+            id: 'new',
+            label: 'Bank',
+            url: 'https://bank.example',
+            username: 'me',
+            password: 'a-notably-long-generated-password-0123456789',
+            notes: '',
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+      },
+      writeHeader,
+    )
+    expect(after.ciphertext.length).toBe(before.ciphertext.length)
+  })
+
+  it('round-trips a vault big enough to need several blocks', async () => {
+    const big = withEntries(80)
+    const blob = await encryptVault(key, big, writeHeader)
+    expect(blob.ciphertext.length).toBeGreaterThan(PAD_BLOCK_BYTES + GCM_TAG_BYTES)
+    expect(await decryptVault(key, blob, readHeader)).toEqual(big)
+  })
+
+  it('will not open with a header that is not the one it was sealed under', async () => {
+    const blob = await encryptVault(key, sampleVault, writeHeader)
+    // A rewritten salt, which is the field an attacker with the profile
+    // directory would reach for.
+    await expect(
+      decryptVault(key, blob, { ...readHeader, salt: 'b3RoZXJzYWx0eHg=' }),
+    ).rejects.toBeInstanceOf(WrongPassphraseError)
+    // Altered KDF parameters — the header field that decides how much work an
+    // attacker has to do, and so the one worth binding most.
+    await expect(
+      decryptVault(key, blob, { ...readHeader, kdfParams: { ...TEST_KDF, memoryKiB: 32 * 1024 } }),
+    ).rejects.toBeInstanceOf(WrongPassphraseError)
+    await expect(
+      decryptVault(key, blob, { ...readHeader, kdfParams: { ...TEST_KDF, iterations: 1 } }),
+    ).rejects.toBeInstanceOf(WrongPassphraseError)
+  })
+
+  it('will not open a current vault claiming to be an old one, or the reverse', async () => {
+    // Flipping the stored version is the cheapest tamper there is, and both
+    // directions have to fail closed rather than half-parse.
+    const current = await encryptVault(key, sampleVault, writeHeader)
+    await expect(decryptVault(key, current, { ...readHeader, version: 1 })).rejects.toBeInstanceOf(
+      WrongPassphraseError,
+    )
+  })
+})
+
+describe('opening a pre-0014 vault', () => {
+  const key = new Uint8Array(32).fill(1)
+  const header: VaultHeader = { version: 1, salt: 'c2FsdGVkc2FsdGVk', kdfParams: TEST_KDF }
+
+  it('still opens a format-1 vault: unpadded, with nothing bound', async () => {
+    // Written the way the shipped app wrote it before this change — plain JSON,
+    // no additional data — so this is the real migration case, not a mock of it.
+    const iv = new Uint8Array(12).fill(7)
+    const subtle = await crypto.subtle.importKey('raw', key, 'AES-GCM', false, ['encrypt'])
+    const ciphertext = new Uint8Array(
+      await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv },
+        subtle,
+        new TextEncoder().encode(JSON.stringify(sampleVault)),
+      ),
+    )
+    // The premise of the whole exercise: the old format's length is its
+    // plaintext's length.
+    expect(ciphertext.length).toBe(JSON.stringify(sampleVault).length + 16)
+    expect(await decryptVault(key, { iv, ciphertext }, header)).toEqual(sampleVault)
+  })
+
+  it('refuses an old vault whose header claims the current format', async () => {
+    const iv = new Uint8Array(12).fill(7)
+    const subtle = await crypto.subtle.importKey('raw', key, 'AES-GCM', false, ['encrypt'])
+    const ciphertext = new Uint8Array(
+      await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv },
+        subtle,
+        new TextEncoder().encode(JSON.stringify(sampleVault)),
+      ),
+    )
+    await expect(
+      decryptVault(key, { iv, ciphertext }, { ...header, version: 2 }),
+    ).rejects.toBeInstanceOf(WrongPassphraseError)
   })
 })
 

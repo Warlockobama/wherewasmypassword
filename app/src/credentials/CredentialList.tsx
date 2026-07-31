@@ -1,8 +1,5 @@
 import { useState } from 'react'
 import { Button, Panel } from '../ui.tsx'
-import { isExtensionContext } from '../platform.ts'
-import { requestAutofill } from './autofill.ts'
-import { credentialOrigin } from './match-url.ts'
 import { copyWithAutoClear } from './clipboard.ts'
 import type { Credential } from './types.ts'
 
@@ -46,45 +43,6 @@ function CredentialRow({
 }) {
   const [status, setStatus] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
-  // `expected` is null when the credential has no stored site at all, which
-  // needs different words from a genuine mismatch.
-  const [mismatch, setMismatch] = useState<{ page: string; expected: string | null } | null>(null)
-  const canAutofill = isExtensionContext()
-
-  const handleAutofill = async (overrideOrigin?: string) => {
-    setStatus('Filling...')
-    setMismatch(null)
-    const result = await requestAutofill({
-      username: cred.username,
-      password: cred.password,
-      expectedOrigin: credentialOrigin(cred.url),
-      overrideOrigin,
-    })
-    if (result.ok && result.filled) {
-      setStatus('Filled')
-    } else if (result.reason === 'origin-mismatch' || result.reason === 'no-stored-origin') {
-      // Never fill silently across origins: this is exactly what a look-alike
-      // phishing page is counting on. A credential with no stored site gets
-      // the same treatment rather than a free pass.
-      setStatus(null)
-      setMismatch({
-        page: result.pageOrigin ?? 'this page',
-        expected: result.reason === 'origin-mismatch' ? (result.expectedOrigin ?? 'the stored site') : null,
-      })
-      return
-    } else if (result.reason === 'no-password-field') {
-      setStatus('No login field found on page')
-    } else if (result.reason === 'no-page-tab') {
-      // Today this is the normal outcome: the extension's own tab is the
-      // active one whenever this button is clicked. See decisions/0009.
-      setStatus('Could not reach the login page — use Copy for now')
-    } else if (result.reason === 'not-in-extension') {
-      setStatus('Autofill requires the extension context')
-    } else {
-      setStatus('Could not reach page — try the clipboard fallback')
-    }
-    setTimeout(() => setStatus(null), 3000)
-  }
 
   const handleCopy = async () => {
     try {
@@ -114,18 +72,11 @@ function CredentialRow({
           )}
         </div>
         <div className="flex shrink-0 gap-1.5">
-          {/* Autofill needs the extension APIs; on mobile/PWA it can't work,
-              so copy-with-auto-clear becomes the primary action instead. */}
-          {canAutofill && (
-            <Button variant="primary" className="!px-3 !py-1 !text-sm" onClick={() => void handleAutofill()}>
-              Autofill
-            </Button>
-          )}
-          <Button
-            variant={canAutofill ? 'secondary' : 'primary'}
-            className="!px-3 !py-1 !text-sm"
-            onClick={handleCopy}
-          >
+          {/* No Autofill button here on purpose. This tab is the active tab
+              whenever it is on screen, so a fill from here has nowhere to go —
+              it is the toolbar popup, opened while the login page is in front
+              of you, that can reach the page. Copy is the fallback. */}
+          <Button variant="primary" className="!px-3 !py-1 !text-sm" onClick={handleCopy}>
             Copy
           </Button>
         </div>
@@ -133,36 +84,6 @@ function CredentialRow({
 
       {status && (
         <p className="text-xs text-dusk/70">{status}</p>
-      )}
-
-      {mismatch && (
-        <div className="space-y-2 rounded-lg border-2 border-brick/60 bg-brick/10 p-2 text-xs">
-          {mismatch.expected ? (
-            <p>
-              This page is <strong className="break-all">{mismatch.page}</strong>, but this password
-              is for <strong className="break-all">{mismatch.expected}</strong>. If you did not
-              expect that, the page may be impersonating the real site.
-            </p>
-          ) : (
-            <p>
-              This password has no site saved against it, so there is nothing to check{' '}
-              <strong className="break-all">{mismatch.page}</strong> against. Fill it only if this is
-              the page you meant — adding the address to the entry lets it be checked next time.
-            </p>
-          )}
-          <div className="flex gap-3">
-            <button
-              type="button"
-              className={`${ROW_ACTION} font-semibold text-brick`}
-              onClick={() => void handleAutofill(mismatch.page)}
-            >
-              Fill anyway
-            </button>
-            <button type="button" className={ROW_ACTION} onClick={() => setMismatch(null)}>
-              Cancel
-            </button>
-          </div>
-        </div>
       )}
 
       {/* Row actions are padded to a usable tap height, and Delete sits at the

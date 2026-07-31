@@ -8,3 +8,7 @@
 - 2026-07-30 RESOLVED 0006-mobile-version-proposal.md — 1. **Defer a mobile app and focus on the extension**: James said "maybe we should focus on the extension itself." Treat 
 - 2026-07-30 DIRECTIVE 0008-adversarial-review-compromised-browser-risk.md — James says: "Focus on what happens if the user's browser is compromised. Will the user's memorized password be enough to
 - 2026-07-30 DIRECTIVE 0010-status-check-what-are-you-working.md — James is checking in. Reply by appending a `## Status report (date)` section to this doc, and keep it short — it gets re
+- 2026-07-31 RESOLVED 0011-autofill-popup-or-remembered-tab.md — 1. **Ship the compact popup flow**: James chose the recommended default, saying "let’s go with the recommendation." Impl
+- 2026-07-31 RESOLVED 0012-change-master-passphrase.md — 1. **Implement master passphrase change and KDF upgrade together**: James said "go with the recommendation." Implement a
+- 2026-07-31 RESOLVED 0013-kdf-parameter-upgrade-on-unlock.md — 1. **Upgrade KDF parameters on unlock**: James said "yeah, that's fine" to the recommendation. Raise the default memory 
+- 2026-07-31 RESOLVED 0014-pad-ciphertext-and-bind-header.md — 1. **Go for padding and header binding**: James chose the recommendation. Pad the vault plaintext to the next 4 KiB with

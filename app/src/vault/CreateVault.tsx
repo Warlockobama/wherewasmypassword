@@ -1,15 +1,14 @@
 import { useState } from 'react'
-import { DEFAULT_KDF_PARAMS, deriveKey } from '../crypto/kdf.ts'
-import { randomBytes } from '../crypto/random.ts'
-import { encryptVault, toBase64, type Association, type VaultData } from '../crypto/vault.ts'
+import { DEFAULT_KDF_PARAMS } from '../crypto/kdf.ts'
+import type { Association, VaultData } from '../crypto/vault.ts'
 import { downloadBackup } from '../storage/backup.ts'
 import {
   freshPracticeMeta,
   requestPersistence,
-  saveVault,
   savePracticeMeta,
   type StoredVault,
 } from '../storage/db.ts'
+import { rekeyVault } from './seal.ts'
 import { Button, Panel, Screen, Title } from '../ui.tsx'
 
 type Status = 'idle' | 'working' | 'done' | 'error'
@@ -30,27 +29,16 @@ export default function CreateVault({
   const create = async () => {
     setStatus('working')
     try {
-      setDetail('Stretching your passphrase into a key (Argon2id, 64 MB)…')
-      const salt = randomBytes(16)
-      const passphrase = words.join(' ')
-      const rawKey = await deriveKey(passphrase, salt)
-
-      setDetail('Encrypting your vault…')
+      setDetail(
+        `Stretching your passphrase into a key (Argon2id, ${DEFAULT_KDF_PARAMS.memoryKiB / 1024} MB)…`,
+      )
       const now = Date.now()
       const data: VaultData = { version: 1, words, associations, createdAt: now, entries: [] }
-      const blob = await encryptVault(rawKey, data)
+      // Same path as changing the passphrase and as raising an old vault's
+      // settings: derive under a fresh salt, encrypt, save.
+      const { rawKey, stored } = await rekeyVault(words.join(' '), data, now)
 
       setDetail('Saving to this browser…')
-      const stored: StoredVault = {
-        version: 1,
-        salt: toBase64(salt),
-        kdfParams: DEFAULT_KDF_PARAMS,
-        iv: toBase64(blob.iv),
-        ciphertext: toBase64(blob.ciphertext),
-        createdAt: now,
-        updatedAt: now,
-      }
-      await saveVault(stored)
       await savePracticeMeta(freshPracticeMeta(now))
       await requestPersistence()
 

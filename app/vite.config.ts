@@ -1,4 +1,5 @@
 /// <reference types="vitest/config" />
+import { fileURLToPath } from 'node:url'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -34,6 +35,17 @@ function cspPlugin(): Plugin {
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), cspPlugin()],
+  build: {
+    rollupOptions: {
+      // Two documents, one bundle: `index.html` is the full memory house and
+      // `popup.html` is the toolbar panel. The hosted (non-extension) build
+      // ships both harmlessly — only the browser action ever opens the popup.
+      input: {
+        index: fileURLToPath(new URL('./index.html', import.meta.url)),
+        popup: fileURLToPath(new URL('./popup.html', import.meta.url)),
+      },
+    },
+  },
   server: {
     port: 5199,
   },

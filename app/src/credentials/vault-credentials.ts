@@ -1,7 +1,8 @@
 import type { Credential } from './types.ts'
 import { newCredentialId } from './credential-id.ts'
-import { encryptVault, toBase64, type VaultData } from '../crypto/vault.ts'
-import { saveVault, type StoredVault } from '../storage/db.ts'
+import type { VaultData } from '../crypto/vault.ts'
+import { sealVault } from '../vault/seal.ts'
+import type { StoredVault } from '../storage/db.ts'
 
 /** Fields the caller supplies when adding a new credential. */
 export type NewCredential = Omit<Credential, 'id' | 'createdAt' | 'updatedAt'>
@@ -12,17 +13,17 @@ export type CredentialPatch = Partial<NewCredential> & { id: string }
 /**
  * Re-encrypt the vault and persist it to IndexedDB.
  * Returns the updated StoredVault for callers that track it in state.
+ *
+ * The key and salt are unchanged — only the contents moved — but the record is
+ * rewritten in the current format, so a vault still on an old one is upgraded
+ * by the first credential the user saves.
  */
-async function persistVault(rawKey: Uint8Array, data: VaultData, stored: StoredVault): Promise<StoredVault> {
-  const blob = await encryptVault(rawKey, data)
-  const next: StoredVault = {
-    ...stored,
-    iv: toBase64(blob.iv),
-    ciphertext: toBase64(blob.ciphertext),
-    updatedAt: Date.now(),
-  }
-  await saveVault(next)
-  return next
+function persistVault(rawKey: Uint8Array, data: VaultData, stored: StoredVault): Promise<StoredVault> {
+  return sealVault(rawKey, data, {
+    salt: stored.salt,
+    kdfParams: stored.kdfParams,
+    createdAt: stored.createdAt,
+  })
 }
 
 /** Add a credential, re-encrypt, and persist. Returns updated [data, stored]. */

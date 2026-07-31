@@ -3,6 +3,7 @@ import { deriveKey } from '../crypto/kdf.ts'
 import { decryptVault, fromBase64, WrongPassphraseError, type VaultData } from '../crypto/vault.ts'
 import { parseBackup } from '../storage/backup.ts'
 import { archiveCurrentVault, saveVault, type StoredVault } from '../storage/db.ts'
+import { upgradeNeeded, upgradeOnUnlock } from './seal.ts'
 import { Button, Panel, Screen, Title } from '../ui.tsx'
 
 export default function LockScreen({
@@ -13,7 +14,7 @@ export default function LockScreen({
 }: {
   stored: StoredVault
   practiceDue: boolean
-  onUnlock: (rawKey: Uint8Array, data: VaultData) => void
+  onUnlock: (rawKey: Uint8Array, data: VaultData, stored: StoredVault, resealed: boolean) => void
   onRestored: (stored: StoredVault) => void
 }) {
   const [phrase, setPhrase] = useState('')
@@ -22,18 +23,29 @@ export default function LockScreen({
   const [pendingRestore, setPendingRestore] = useState<StoredVault | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
+  // Shown while the vault is being brought forward, because on an old vault
+  // that is a second Argon2id run and the wait roughly doubles. Silence there
+  // reads as a hang.
+  const [upgrading, setUpgrading] = useState(false)
+
   const unlock = async () => {
     if (!phrase.trim() || busy) return
     setBusy(true)
     setError(null)
     try {
       const rawKey = await deriveKey(phrase, fromBase64(stored.salt), stored.kdfParams)
-      const data = await decryptVault(rawKey, {
-        iv: fromBase64(stored.iv),
-        ciphertext: fromBase64(stored.ciphertext),
-      })
+      const data = await decryptVault(
+        rawKey,
+        { iv: fromBase64(stored.iv), ciphertext: fromBase64(stored.ciphertext) },
+        stored,
+      )
+      // Only now, with the phrase proven, can an old vault be moved to today's
+      // key-derivation settings and vault format — deriving a new key needs the
+      // phrase, and this is the only moment it is in hand (`decisions/0013`).
+      setUpgrading(upgradeNeeded(stored) !== 'none')
+      const brought = await upgradeOnUnlock(phrase, rawKey, data, stored)
       setPhrase('')
-      onUnlock(rawKey, data)
+      onUnlock(brought.rawKey, data, brought.stored, brought.upgraded !== 'none')
     } catch (err) {
       setError(
         err instanceof WrongPassphraseError
@@ -42,6 +54,7 @@ export default function LockScreen({
       )
     } finally {
       setBusy(false)
+      setUpgrading(false)
     }
   }
 
@@ -109,7 +122,11 @@ export default function LockScreen({
         {busy && (
           <div className="flex items-center justify-center gap-2">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-dusk/20 border-t-amber-glow" />
-            <span className="text-sm text-dusk/70">Stretching passphrase (Argon2id)…</span>
+            <span className="text-sm text-dusk/70">
+              {upgrading
+                ? 'Re-encrypting with stronger settings…'
+                : 'Stretching passphrase (Argon2id)…'}
+            </span>
           </div>
         )}
         {error && <p className="text-sm font-semibold text-brick">{error}</p>}
