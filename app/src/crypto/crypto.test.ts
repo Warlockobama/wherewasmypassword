@@ -636,6 +636,18 @@ describe('backup files from untrusted sources', () => {
     expect(() => parseBackup(wrap({ ...goodVault, salt: 'A'.repeat(500) }))).toThrow(/incomplete/i)
   })
 
+  it('rejects base64 of a length atob will not accept, not just a bad alphabet', () => {
+    // `AAAAA` is five legal base64 characters and one over a multiple of four.
+    // The alphabet check passed it and `atob` threw a raw DOMException at
+    // unlock — one screen after the restore had replaced the live vault, which
+    // is precisely the ordering this validation exists to prevent.
+    expect(() => atob('AAAAA')).toThrow()
+    expect(() => parseBackup(wrap({ ...goodVault, salt: 'AAAAA' }))).toThrow(/incomplete/i)
+    expect(() => parseBackup(wrap({ ...goodVault, ciphertext: 'AAAAAAAAA' }))).toThrow(/incomplete/i)
+    // Unpadded lengths that `atob` does accept stay accepted.
+    expect(parseBackup(wrap({ ...goodVault, salt: 'AAA' })).salt).toBe('AAA')
+  })
+
   it('rejects JSON that parses to something that is not an object', () => {
     expect(() => parseBackup('null')).toThrow(/not a where was my password/i)
     expect(() => parseBackup('7')).toThrow(/not a where was my password/i)

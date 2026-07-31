@@ -46,8 +46,17 @@ export function parseBackup(text: string): StoredVault {
   // the restore has already replaced the live vault. Base64 is checked here
   // for the same reason: `salt: 'not base64!!'` is a string of a sane length
   // and fails only when `atob` reaches it, one screen too late.
+  // The length test is not pedantry: `atob` accepts 2 and 3 characters over a
+  // multiple of four but throws on 1, and the alphabet regex alone cannot see
+  // that. `salt: 'AAAAA'` used to pass here and fail as a raw DOMException at
+  // unlock — after the restore had already replaced the live vault, which is
+  // exactly the ordering this validation exists to prevent.
   const isField = (x: unknown, max: number) =>
-    typeof x === 'string' && x.length > 0 && x.length <= max && BASE64.test(x)
+    typeof x === 'string' &&
+    x.length > 0 &&
+    x.length <= max &&
+    x.length % 4 !== 1 &&
+    BASE64.test(x)
   // Both formats are accepted and the version is carried through unchanged: a
   // format-1 file has to keep saying 1, because that is what tells the unlock
   // path to decrypt it without the padding and header binding it was written

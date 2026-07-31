@@ -4,7 +4,7 @@ import type { VaultData } from '../crypto/vault.ts'
 import { ClueCard, EmptySlot } from '../palace/rooms/shared.tsx'
 import { LOCI } from '../palace/loci.ts'
 import { downloadBackup } from '../storage/backup.ts'
-import { deleteVault, type StoredVault } from '../storage/db.ts'
+import { deleteVault, VaultSupersededError, type StoredVault } from '../storage/db.ts'
 import { Button, Panel, Screen, Title } from '../ui.tsx'
 import { isExtensionContext } from '../platform.ts'
 import type { Credential } from '../credentials/types.ts'
@@ -47,6 +47,7 @@ export default function UnlockedHome({
   const [formMode, setFormMode] = useState<'hidden' | 'add' | 'edit'>('hidden')
   const [editingCred, setEditingCred] = useState<Credential | undefined>(undefined)
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const clues = Object.fromEntries(
     LOCI.map((l) => {
@@ -62,14 +63,30 @@ export default function UnlockedHome({
     }),
   )
 
+  /**
+   * A save can now be refused rather than merely fail: if the vault was
+   * re-keyed in another tab, writing this one would put the retired key back.
+   * Silence there would look exactly like success and lose the edit, so every
+   * save path reports.
+   */
+  const saveError = (err: unknown) =>
+    setError(
+      err instanceof VaultSupersededError
+        ? 'This vault was re-encrypted in another tab, so this change was not saved. Lock and unlock to pick up the new one — your entry is still in the form.'
+        : `Could not save: ${err instanceof Error ? err.message : String(err)}`,
+    )
+
   const handleAddCredential = async (fields: {
     label: string; url: string; username: string; password: string; notes: string
   }) => {
     setSaving(true)
+    setError(null)
     try {
       const [nextData, nextStored] = await addCredential(rawKey, data, stored, fields)
       onVaultChanged(nextData, nextStored)
       setFormMode('hidden')
+    } catch (err) {
+      saveError(err)
     } finally {
       setSaving(false)
     }
@@ -80,6 +97,7 @@ export default function UnlockedHome({
   }) => {
     if (!editingCred) return
     setSaving(true)
+    setError(null)
     try {
       const [nextData, nextStored] = await editCredential(rawKey, data, stored, {
         id: editingCred.id,
@@ -88,14 +106,21 @@ export default function UnlockedHome({
       onVaultChanged(nextData, nextStored)
       setFormMode('hidden')
       setEditingCred(undefined)
+    } catch (err) {
+      saveError(err)
     } finally {
       setSaving(false)
     }
   }
 
   const handleDeleteCredential = async (id: string) => {
-    const [nextData, nextStored] = await deleteCredential(rawKey, data, stored, id)
-    onVaultChanged(nextData, nextStored)
+    setError(null)
+    try {
+      const [nextData, nextStored] = await deleteCredential(rawKey, data, stored, id)
+      onVaultChanged(nextData, nextStored)
+    } catch (err) {
+      saveError(err)
+    }
   }
 
   if (walking) {
@@ -201,6 +226,12 @@ export default function UnlockedHome({
 
       {saving && (
         <p className="text-sm text-dusk/60">Encrypting and saving...</p>
+      )}
+
+      {error && (
+        <p className="w-full rounded-lg border-2 border-brick/60 bg-brick/10 p-3 text-sm font-semibold text-brick">
+          {error}
+        </p>
       )}
 
       <Panel className="w-full space-y-3">

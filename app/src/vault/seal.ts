@@ -20,6 +20,13 @@ export async function sealVault(
   rawKey: Uint8Array,
   data: VaultData,
   header: { salt: string; kdfParams: StoredVault['kdfParams']; createdAt: number },
+  /**
+   * The record this update was built from. Supplied by writes that mean to keep
+   * the existing key, so that a stale context cannot overwrite a vault whose
+   * key has changed under it; omitted by the writes that are themselves
+   * changing the key. See `saveVault`.
+   */
+  expecting?: StoredVault,
 ): Promise<StoredVault> {
   const blob = await encryptVault(rawKey, data, {
     salt: header.salt,
@@ -34,7 +41,7 @@ export async function sealVault(
     createdAt: header.createdAt,
     updatedAt: Date.now(),
   }
-  await saveVault(next)
+  await saveVault(next, expecting)
   return next
 }
 

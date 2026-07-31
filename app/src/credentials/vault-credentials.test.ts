@@ -7,9 +7,15 @@ import type { StoredVault } from '../storage/db.ts'
 // node test environment, so the save is captured here instead — which also
 // lets each test read back exactly what would have hit disk.
 const saved: StoredVault[] = []
+/** What another context has left on disk, if anything, for the guard to see. */
+let onDisk: StoredVault | undefined
+class FakeSuperseded extends Error {}
 vi.mock('../storage/db.ts', () => ({
-  saveVault: async (record: StoredVault) => {
+  VaultSupersededError: FakeSuperseded,
+  saveVault: async (record: StoredVault, expecting?: StoredVault) => {
+    if (expecting && onDisk && onDisk.salt !== expecting.salt) throw new FakeSuperseded()
     saved.push(record)
+    onDisk = record
   },
 }))
 
@@ -54,6 +60,7 @@ const fields = {
 
 beforeEach(() => {
   saved.length = 0
+  onDisk = undefined
 })
 
 describe('credential persistence', () => {
@@ -90,6 +97,26 @@ describe('credential persistence', () => {
     // the 16-byte GCM tag.
     expect(fromBase64(stored.ciphertext).length).toBe(4096 + 16)
     expect((await readBack(stored)).entries).toHaveLength(1)
+  })
+
+  it('refuses to write over a vault that was re-keyed in another tab', async () => {
+    // The scenario that can destroy a vault: this tab still holds the key and
+    // salt from before a passphrase change made somewhere else. Its record
+    // would be perfectly self-consistent, so it fails *open* — the vault would
+    // silently go back to opening with the phrase the user just retired.
+    const [data, stored] = await addCredential(key, baseData, baseStored, fields)
+    onDisk = { ...stored, salt: 'YW5vdGhlcnNhbHQ=' }
+    const before = saved.length
+    await expect(
+      addCredential(key, data, stored, { ...fields, label: 'Second' }),
+    ).rejects.toBeInstanceOf(FakeSuperseded)
+    expect(saved).toHaveLength(before)
+  })
+
+  it('still allows an ordinary save when the key on disk is the one it derived from', async () => {
+    const [data, stored] = await addCredential(key, baseData, baseStored, fields)
+    const [after] = await addCredential(key, data, stored, { ...fields, label: 'Second' })
+    expect(after.entries).toHaveLength(2)
   })
 
   it('uses a fresh IV on every save', async () => {

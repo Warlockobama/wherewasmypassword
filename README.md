@@ -35,10 +35,21 @@ you can't hide something in a drawer and open it later. The illustrated house ca
   watch the compartment close over it.
 - **Training gauntlet**: forward walk → backward walk → random spot-checks (all requiring
   typed recall before the compartment opens) → mastery gate: the full phrase, cold, twice.
-- **The vault**: Argon2id (64 MiB, t=3) stretches the phrase into an AES-256-GCM key; the
+- **The vault**: Argon2id (256 MiB, t=3) stretches the phrase into an AES-256-GCM key; the
   vault (your words + imagery, and in v2 your site credentials) is stored encrypted in
-  IndexedDB, on this device only. Encrypted backup export/import. Spaced practice
-  reminders at 1, 2, 4, 7, 14, 30 days — unlocking *is* the rehearsal.
+  IndexedDB, on this device only. The plaintext is padded to 4 KiB blocks so the stored
+  size does not track what is inside, and the header (salt, KDF parameters, format
+  version) is bound into the ciphertext as additional data. Encrypted backup
+  export/import. Spaced practice reminders at 1, 2, 4, 7, 14, 30 days — unlocking *is*
+  the rehearsal.
+- **Changing the master phrase**: generates a new one, walks you through placing it, and
+  re-encrypts the vault under it with your passwords untouched. Vaults created under
+  weaker key-derivation settings are re-keyed to the current ones automatically, the
+  next time they are unlocked.
+- **The toolbar popup**: on a login page, click the toolbar button. A compact panel
+  unlocks, puts the entry saved for *that* site at the top of the list, and types it
+  straight into the form — no clipboard. The memory house stays a full tab, which is
+  where training, palace walks, and adding or editing entries live.
 
 ### Security model
 
@@ -53,14 +64,32 @@ you can't hide something in a drawer and open it later. The illustrated house ca
   locked. Locking one tab locks every open copy.
 - If you forget the phrase, nothing can recover the vault. That's the deal — and the
   whole point of the training.
+- **Autofill without host permissions.** The extension asks for `activeTab` and
+  `scripting` and nothing else — no "read and change all your data on every website".
+  `activeTab` is granted for the tab that was active when the toolbar button was
+  clicked, which is why filling happens from the popup: a popup is not a tab, so the
+  login page underneath stays active and stays granted. (The UI used to open in a full
+  tab, which made *itself* the active tab — autofill could not work at all, and this is
+  what fixed it; see `decisions/0011`.) The password is typed into the field by a content
+  script injected on demand into that one tab, and never touches the clipboard.
+- **The page is checked twice, before anything is typed and before anything is sent.**
+  The content script compares the credential's saved origin against the page it is
+  actually on, so a look-alike phishing page does not get the real password; a mismatch
+  asks first and names both origins, and the approval carries the origin the user was
+  shown, so it cannot be reused after the page navigates. The background worker makes the
+  same comparison *first*, on the URL `activeTab` lets it read, so a page that navigated
+  while the passphrase was being typed is refused before the password is handed to its
+  renderer at all. Fields the user cannot see — tiny, transparent, off-screen, disabled,
+  covered — are refused, so a harvesting page gets nothing.
+- **The popup holds the key for as long as it is open, and no longer.** The browser
+  destroys a popup the moment it loses focus, so the key dies with it; the popup asks for
+  the passphrase each time rather than sharing a session with the full tab
+  (`decisions/0015`).
 
-**Known limitation:** autofill does not currently work. The extension opens its UI in a
-full tab, and the `activeTab` permission is granted to the tab that was active when the
-toolbar icon was clicked — never the tab the fill targets. Confirmed by
-`npm run autofill`, which drives the packed extension in a real browser; see
-`decisions/0009`. Until it is resolved, Copy is the working path. Copy clears the
-clipboard 30 seconds after you return to the extension's tab (the browser will not let a
-background page touch the clipboard) — note your OS may keep its own clipboard history.
+**Known limitation:** Copy remains the fallback for pages autofill cannot reach, and is
+only offered in the full tab. It clears the clipboard 30 seconds after you return to that
+tab (the browser will not let a background page touch the clipboard) — note your OS may
+keep its own clipboard history.
 
 ### Develop
 
@@ -76,14 +105,35 @@ npm run autofill  # loads the packed extension in a real browser and tests the f
 
 `npm run autofill` needs Microsoft Edge: Chrome 137 and later ignore `--load-extension`,
 so on Chrome the extension silently never loads and every check would pass vacuously.
-It currently exits non-zero — see the known limitation above.
+
+It runs in two passes, and both must be green. Pass 1 is `dist/` exactly as shipped: the
+manifest wiring, the popup opening onto the login tab rather than onto the extension's own
+UI, the memory house opening from the popup, and the old full-tab path still refusing.
+Pass 2 runs the same shipped popup, worker and content script through every fill, origin
+and harvesting check, with one thing simulated — the `activeTab` grant, replaced by a host
+permission the extension does not ship.
+
+That substitution is not laziness, it is the boundary of what a script can do: `activeTab`
+is conferred by the browser's own action-invocation path, and none of it is reachable over
+the DevTools protocol. Measured, not assumed — `chrome.action.openPopup()` opens the real
+popup but confers nothing, synthesised keystrokes never reach the command dispatcher, and
+a pre-seeded profile is discarded for an unpacked extension.
+
+**The one manual check** that closes that gap, worth doing before a release:
+
+1. `npm run build`, then load `app/dist` unpacked (`edge://extensions` → Developer mode)
+2. Go to any real login page and click the toolbar button
+3. The popup should name that site — "Filling into example.com" — which by itself proves
+   the grant arrived, since the URL is only readable with it
+4. Unlock, click **Fill**, and watch the password land in the form
 
 ### Install as a browser extension
 
 1. `npm run build` in `app/`
 2. Open `chrome://extensions` (or `edge://extensions`), enable **Developer mode**
 3. **Load unpacked** → select `app/dist`
-4. Click the toolbar button — the memory house opens in a tab
+4. Click the toolbar button — the popup opens; "Memory house" in it opens the full tab,
+   which is where you build the vault the first time
 
 The same `dist/` also works as a plain static site on any host; the extension wrapper is
 `public/manifest.json` + `public/background.js`. Vault data lives in the extension's own

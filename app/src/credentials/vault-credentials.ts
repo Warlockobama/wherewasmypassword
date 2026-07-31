@@ -19,11 +19,14 @@ export type CredentialPatch = Partial<NewCredential> & { id: string }
  * by the first credential the user saves.
  */
 function persistVault(rawKey: Uint8Array, data: VaultData, stored: StoredVault): Promise<StoredVault> {
-  return sealVault(rawKey, data, {
-    salt: stored.salt,
-    kdfParams: stored.kdfParams,
-    createdAt: stored.createdAt,
-  })
+  return sealVault(
+    rawKey,
+    data,
+    { salt: stored.salt, kdfParams: stored.kdfParams, createdAt: stored.createdAt },
+    // This write keeps the existing key, so it must not land on a vault that
+    // has since been re-keyed elsewhere — that would put the retired key back.
+    stored,
+  )
 }
 
 /** Add a credential, re-encrypt, and persist. Returns updated [data, stored]. */

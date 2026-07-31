@@ -62,8 +62,42 @@ function db() {
   })
 }
 
-export async function saveVault(record: StoredVault): Promise<void> {
-  await (await db()).put('vault', record, VAULT_KEY)
+export class VaultSupersededError extends Error {
+  constructor() {
+    super('This vault was re-encrypted somewhere else. Lock and unlock to continue.')
+    this.name = 'VaultSupersededError'
+  }
+}
+
+/**
+ * Write the vault record.
+ *
+ * When `expecting` is given, the write is refused if the salt on disk is no
+ * longer the one the caller derived its key from. That is the difference
+ * between two contexts racing over the *contents* — last write wins, as it
+ * always has — and one of them quietly reverting a change of *key*.
+ *
+ * The scenario it exists for: two copies of the UI are open, one changes the
+ * master passphrase (or upgrades an old vault's KDF settings), and the other,
+ * still holding the retired key and salt, saves a credential. The record it
+ * would write is perfectly self-consistent, so it fails open rather than
+ * closed — the vault silently goes back to opening with the phrase the user was
+ * just told is dead. If they have let that phrase go, everything inside is lost.
+ */
+export async function saveVault(record: StoredVault, expecting?: StoredVault): Promise<void> {
+  const database = await db()
+  const tx = database.transaction('vault', 'readwrite')
+  if (expecting) {
+    const current = await tx.store.get(VAULT_KEY)
+    // Compared inside the transaction, so nothing can land between the read
+    // and the write. A different salt means a different key.
+    if (current && current.salt !== expecting.salt) {
+      tx.abort()
+      throw new VaultSupersededError()
+    }
+  }
+  await tx.store.put(record, VAULT_KEY)
+  await tx.done
 }
 
 /**

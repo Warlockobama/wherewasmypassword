@@ -104,18 +104,28 @@ export default function ChangePassphrase({
         nextData,
         stored.createdAt,
       )
-      // A new phrase means a new memory to build, so the spaced-practice ladder
-      // starts at the bottom rung rather than carrying over a mastery that was
-      // earned for different words.
-      await savePracticeMeta(freshPracticeMeta(Date.now()))
-      // The archived copy is still encrypted under the phrase just retired.
-      // Leaving it would hand anyone with this profile directory exactly the
-      // vault the user was trying to move away from.
-      await deleteArchivedVault()
-      // The old key has nothing left to open.
+      // Past this line the vault on disk is the new one and only the new phrase
+      // opens it. Everything below is housekeeping, and none of it may be
+      // allowed to throw us into the error screen — that screen says "nothing
+      // was changed", which from here would be a lie capable of costing the
+      // user the vault.
       rawKey.fill(0)
       setResult({ rawKey: nextKey, data: nextData, stored: nextStored })
       setStep('done')
+      try {
+        // A new phrase means a new memory to build, so the spaced-practice
+        // ladder starts at the bottom rung rather than carrying over a mastery
+        // that was earned for different words.
+        await savePracticeMeta(freshPracticeMeta(Date.now()))
+        // The archived copy is still encrypted under the phrase just retired.
+        // Leaving it would hand anyone with this profile directory exactly the
+        // vault the user was trying to move away from.
+        await deleteArchivedVault()
+      } catch {
+        // Both are recoverable on their own terms: a stale practice date is
+        // cosmetic, and the archive is retried by the next restore. Neither is
+        // worth telling the user their passphrase change failed when it did not.
+      }
     } catch (err) {
       setDetail(err instanceof Error ? err.message : String(err))
       setStep('error')
