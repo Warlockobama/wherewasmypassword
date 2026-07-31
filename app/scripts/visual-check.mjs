@@ -404,6 +404,31 @@ async function main() {
       problems.push('a reload did not land on the lock screen')
     }
     await shot('14-after-reload')
+
+    // The toolbar popup, at the width the browser actually gives it. It is
+    // served here as a plain page, so it reports that it is not running as the
+    // extension and cannot see a tab — but the layout, the unlock form and the
+    // absence of console errors are the same code the popup runs. The vault
+    // created above is in this origin's IndexedDB, so this is the locked state
+    // a user meets when they click the toolbar button.
+    await call('Emulation.setDeviceMetricsOverride', {
+      width: 340,
+      height: 580,
+      deviceScaleFactor: 2,
+      mobile: false,
+    })
+    await call('Page.navigate', { url: `${ORIGIN}/popup.html` })
+    await sleep(1500)
+    await shot('15-popup-locked')
+    const popupText = await evaluate(`document.body.innerText.trim()`)
+    console.log(`\nPopup: "${popupText.split('\n').join(' | ').slice(0, 110)}"`)
+    if (!popupText.toLowerCase().includes('unlock')) {
+      problems.push('the popup did not offer to unlock the existing vault')
+    }
+    const popupOverflow = await overflow()
+    if (popupOverflow > 0) {
+      problems.push(`the popup scrolls horizontally by ${popupOverflow}px at 340px wide`)
+    }
   } finally {
     try {
       ws?.close()

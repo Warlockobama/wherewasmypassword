@@ -8,18 +8,31 @@
  * Deliberately dependency-free, in the same style as `visual-check.mjs`: it
  * serves its own test pages, launches an already-installed Chromium browser
  * with `--load-extension=dist`, and drives everything over the DevTools
- * protocol.
+ * protocol — including the real toolbar popup, which `chrome.action.openPopup()`
+ * opens and which attaches as an ordinary DevTools target.
  *
  * It runs the suite TWICE:
  *
  *   1. Against `dist/` exactly as shipped. This is the real product.
  *   2. Against a scratch copy whose manifest also carries a host permission
- *      for the test origin. That second pass isolates "the fill logic is
- *      wrong" from "the extension was never allowed to touch the page" — it
- *      is a diagnostic, not a product configuration, and the extension does
- *      not ship that permission.
+ *      for the test origin.
  *
- * Exits non-zero if any pass-1 expectation fails.
+ * THE ONE THING NO HARNESS CAN DO is click the toolbar button. `activeTab` is
+ * conferred by the browser's own action-invocation path — a real click, a
+ * commands-API shortcut, a context menu — and none of those are reachable over
+ * CDP. Measured, not assumed: `chrome.action.openPopup()` opens the popup for
+ * real but confers nothing; `Input.dispatchKeyEvent` never reaches the command
+ * dispatcher (an extension command's `onCommand` does not fire, and an unpacked
+ * extension's `suggested_key` is not even bound in a fresh profile); a
+ * pre-seeded profile `Preferences` is discarded for a `--load-extension` build.
+ *
+ * So pass 2's host permission is not papering over a fill bug — the fill logic
+ * is the same shipped code, driven from the same shipped popup. It stands in
+ * for the ONE thing a script cannot produce: the grant a human's click makes.
+ * Both passes must be green; the summary says which is which, and the README
+ * carries the one manual click that closes the gap.
+ *
+ * Exits non-zero if any expectation in either pass fails.
  */
 import { createServer } from 'node:http'
 import { existsSync } from 'node:fs'
@@ -34,6 +47,10 @@ const APP_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DIST = join(APP_DIR, 'dist')
 const PORT = 5189
 const ORIGIN = `http://127.0.0.1:${PORT}`
+// A second port is a second origin, which is what lets the suite navigate a tab
+// out from under a resolved target and check what happens next.
+const OTHER_PORT = 5190
+const OTHER_ORIGIN = `http://127.0.0.1:${OTHER_PORT}`
 const DEBUG_PORT = 9334
 
 // Edge first, deliberately: Chrome 137 and later ignore `--load-extension`
@@ -78,13 +95,13 @@ const HARVEST_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Ar
 <div style="visibility:hidden"><input name="pw11" type="password" style="width:200px;height:24px"></div>
 </body></html>`
 
-function startServer() {
+function startServer(port) {
   const server = createServer((req, res) => {
     const path = new URL(req.url, ORIGIN).pathname
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
     res.end(path === '/harvest' ? HARVEST_PAGE : LOGIN_PAGE)
   })
-  return new Promise((ok) => server.listen(PORT, '127.0.0.1', () => ok(server)))
+  return new Promise((ok) => server.listen(port, '127.0.0.1', () => ok(server)))
 }
 
 let nextId = 1
@@ -142,10 +159,45 @@ async function scratchBuildWithHostPermission() {
 }
 
 /**
- * Run the whole suite against one extension directory.
- * Returns the list of {name, passed, detail} results.
+ * What the shipped build promises about itself, checked against the files
+ * rather than the running browser: the toolbar button must open the popup, and
+ * it must still be buying that with `activeTab` alone.
  */
-async function runSuite({ extDir, browser, port, label }) {
+async function checkShippedBuild() {
+  const results = []
+  const check = (name, passed, detail) => {
+    results.push({ name, passed, detail })
+    console.log(`  ${passed ? 'PASS' : 'FAIL'}  ${name}${detail ? `\n          ${detail}` : ''}`)
+  }
+  console.log('\n──── what the shipped manifest promises ────\n')
+  const manifest = JSON.parse(await readFile(join(DIST, 'manifest.json'), 'utf8'))
+
+  check(
+    'the toolbar button opens the popup rather than a tab',
+    manifest.action?.default_popup === 'popup.html' && existsSync(join(DIST, 'popup.html')),
+    `action.default_popup=${manifest.action?.default_popup} popup.html present=${existsSync(join(DIST, 'popup.html'))}`,
+  )
+  check(
+    'no host permissions are requested — the popup is what makes activeTab enough',
+    !manifest.host_permissions?.length && !manifest.optional_host_permissions?.length,
+    `host_permissions=${JSON.stringify(manifest.host_permissions ?? null)}`,
+  )
+  check(
+    'the permission set is still just activeTab + scripting',
+    JSON.stringify([...(manifest.permissions ?? [])].sort()) === JSON.stringify(['activeTab', 'scripting']),
+    `permissions=${JSON.stringify(manifest.permissions)}`,
+  )
+  return results
+}
+
+/**
+ * Run the whole suite against one extension directory.
+ *
+ * `hasGrant` says whether this pass can reach page content at all. Without it
+ * the fill checks cannot run — not because the fill code is different, but
+ * because no script can produce the toolbar click that grants `activeTab`.
+ */
+async function runSuite({ extDir, browser, port, label, hasGrant }) {
   const results = []
   const check = (name, passed, detail) => {
     results.push({ name, passed, detail })
@@ -172,54 +224,109 @@ async function runSuite({ extDir, browser, port, label }) {
       ws.addEventListener('open', ok, { once: true })
       ws.addEventListener('error', () => fail(new Error('devtools socket failed')), { once: true })
     })
+    // Service workers and popups are only listed once discovery is on.
+    await rpc(ws, 'Target.setDiscoverTargets', { discover: true })
 
     // Wait for OUR extension specifically. A browser always has component
     // extensions loaded, so "some extension target exists" proves nothing.
     const extId = unpackedExtensionId(extDir)
+    const extPrefix = `chrome-extension://${extId}/`
     let loaded = false
     for (let i = 0; i < 40 && !loaded; i++) {
       const { targetInfos } = await rpc(ws, 'Target.getTargets')
-      loaded = targetInfos.some((t) => t.url.startsWith(`chrome-extension://${extId}/`))
+      loaded = targetInfos.some((t) => t.url.startsWith(extPrefix))
       if (!loaded) await sleep(250)
     }
     if (!loaded) {
       throw new Error(
-        `the extension never loaded (no target under chrome-extension://${extId}/). ` +
+        `the extension never loaded (no target under ${extPrefix}). ` +
           'Chrome 137+ ignores --load-extension; use Microsoft Edge, or load dist/ by hand.',
       )
     }
     console.log(`\n──── ${label} ────\nExtension ${extId} loaded from ${extDir}\n`)
 
-    const openTab = async (url) => {
-      const { targetId } = await rpc(ws, 'Target.createTarget', { url })
+    const targets = async () => (await rpc(ws, 'Target.getTargets')).targetInfos
+    const findTarget = async (predicate, tries = 40) => {
+      for (let i = 0; i < tries; i++) {
+        const found = (await targets()).find(predicate)
+        if (found) return found
+        await sleep(250)
+      }
+      return null
+    }
+
+    /** Attach to a target and hand back an `evaluate` for it. */
+    const attach = async (targetId) => {
       const { sessionId } = await rpc(ws, 'Target.attachToTarget', { targetId, flatten: true })
-      const call = (method, params) => rpc(ws, method, params, sessionId)
-      await call('Runtime.enable')
-      await call('Page.enable')
-      await sleep(600)
-      return {
-        targetId,
-        activate: () => rpc(ws, 'Target.activateTarget', { targetId }),
-        close: () => rpc(ws, 'Target.closeTarget', { targetId }),
-        async evaluate(expression) {
-          const { result, exceptionDetails } = await call('Runtime.evaluate', {
-            expression,
-            awaitPromise: true,
-            returnByValue: true,
-          })
-          if (exceptionDetails) throw new Error(`${exceptionDetails.text} :: ${expression.slice(0, 70)}`)
-          return result.value
-        },
+      await rpc(ws, 'Runtime.enable', {}, sessionId)
+      return async (expression) => {
+        const { result, exceptionDetails } = await rpc(
+          ws,
+          'Runtime.evaluate',
+          { expression, awaitPromise: true, returnByValue: true },
+          sessionId,
+        )
+        if (exceptionDetails) throw new Error(`${exceptionDetails.text} :: ${expression.slice(0, 70)}`)
+        return result.value
       }
     }
 
-    const loginTab = await openTab(`${ORIGIN}/login`)
-    // The extension's own UI, opened exactly the way the toolbar icon opens it.
-    const extTab = await openTab(`chrome-extension://${extId}/index.html`)
+    const openTab = async (url) => {
+      const { targetId } = await rpc(ws, 'Target.createTarget', { url })
+      const evaluate = await attach(targetId)
+      await sleep(600)
+      return {
+        targetId,
+        evaluate,
+        activate: () => rpc(ws, 'Target.activateTarget', { targetId }),
+        close: () => rpc(ws, 'Target.closeTarget', { targetId }),
+      }
+    }
+
+    // ---- the extension's own service worker -----------------------------
+    const swTarget = await findTarget(
+      (t) => t.type === 'service_worker' && t.url.startsWith(extPrefix),
+    )
+    if (!swTarget) throw new Error('the extension service worker never appeared')
+    const swEval = await attach(swTarget.targetId)
+    // The worker target is listed a beat before `chrome` is live in it.
+    for (let i = 0; i < 20; i++) {
+      try {
+        await swEval('chrome.runtime.id')
+        break
+      } catch {
+        await sleep(250)
+      }
+    }
+
+    /** Which tab the browser considers active, as a tab id. Needs no permission. */
+    const activeTabId = () =>
+      swEval(`new Promise((ok) => chrome.tabs.query({ active: true, currentWindow: true },
+        (t) => ok(t[0] ? t[0].id : -1)))`)
+
+    /**
+     * Open the REAL toolbar popup and attach to it.
+     *
+     * `openPopup()` opens the same document a click opens — it just does not
+     * carry the click's `activeTab` grant with it, which is the one gap this
+     * harness cannot close.
+     */
+    const openToolbarPopup = async () => {
+      const stale = (await targets()).find((t) => t.url === `${extPrefix}popup.html`)
+      // A popup left over from an earlier step is pointed at the wrong tab, and
+      // a second openPopup() while one is up throws.
+      if (stale) await rpc(ws, 'Target.closeTarget', { targetId: stale.targetId })
+      await swEval('chrome.action.openPopup()')
+      const popup = await findTarget((t) => t.url === `${extPrefix}popup.html`)
+      if (!popup) throw new Error('the toolbar popup never opened')
+      const evaluate = await attach(popup.targetId)
+      await sleep(400)
+      return evaluate
+    }
 
     /** Fire the same message the app's `requestAutofill()` sends. */
-    const relay = (request) =>
-      extTab.evaluate(`new Promise((ok) => {
+    const relayFrom = (evaluate, request) =>
+      evaluate(`new Promise((ok) => {
         chrome.runtime.sendMessage(${JSON.stringify({ type: 'wwmp-autofill-relay', ...request })},
           (r) => ok(chrome.runtime.lastError
             ? { ok: false, reason: 'send-failed', detail: chrome.runtime.lastError.message }
@@ -232,188 +339,91 @@ async function runSuite({ extDir, browser, port, label }) {
       tab.evaluate(`([...document.querySelectorAll('input')].forEach((i) => (i.value = '')), true)`)
 
     // --------------------------------------------------------------------
-    // Diagnostic: which tab does the worker's own query actually resolve to,
-    // and is its URL even readable? `tabs.query` hides `url` from an
-    // extension with no host permission for that tab, which silently defeats
-    // any guard written against `tab.url`.
-    console.log('Diagnostic: what the background worker sees')
-    await extTab.activate()
-    await sleep(300)
-    const seen = await extTab.evaluate(`new Promise((ok) =>
-      chrome.tabs.query({ active: true, currentWindow: true }, (t) =>
-        ok(JSON.stringify(t.map((x) => ({ id: x.id, url: x.url ?? null, active: x.active })))))
-    )`)
-    console.log(`          active tab per tabs.query: ${seen}`)
-
-    // The toolbar click cannot be driven over the DevTools protocol, so the
-    // API it now relies on to focus an existing UI tab is checked directly.
-    const contexts = await extTab.evaluate(`(async () => {
-      try {
-        const c = await chrome.runtime.getContexts({
-          contextTypes: ['TAB'],
-          documentUrls: [chrome.runtime.getURL('index.html')],
-        })
-        return JSON.stringify(c.map((x) => ({ tabId: x.tabId, windowId: x.windowId })))
-      } catch (e) { return 'THREW: ' + e.message }
-    })()`)
-    check(
-      'the toolbar click can find an already-open UI tab without the tabs permission',
-      contexts.startsWith('[') && JSON.parse(contexts).some((c) => c.tabId >= 0),
-      `runtime.getContexts -> ${contexts}`,
-    )
-
-    // -------------------------------------------------------------------- 1
-    console.log('\nScenario: extension tab active (the real flow)')
-    const realFlow = await relay({
-      username: 'someone@example.com',
-      password: 'correct-horse-battery',
-      expectedOrigin: ORIGIN,
-    })
-    const realFlowFields = await fieldValues(loginTab)
-    check(
-      'autofill reaches the login page from the extension tab',
-      realFlow?.filled === true && realFlowFields.includes('password=correct-horse-battery'),
-      `relay=${JSON.stringify(realFlow)} fields=[${realFlowFields}]`,
-    )
-
-    // -------------------------------------------------------------------- 2
-    console.log('\nScenario: login page active (control — proves the plumbing works)')
-    await clearFields(loginTab)
+    // Setup: a login page and a harvesting page, and the tab ids for both.
+    // Ids are read while each tab is active, which needs no permission at all
+    // — `tabs.query` hides a tab's URL without one, but never its id.
+    const loginTab = await openTab(`${ORIGIN}/login`)
     await loginTab.activate()
     await sleep(300)
-    const control = await relay({
-      username: 'someone@example.com',
-      password: 'correct-horse-battery',
-      expectedOrigin: ORIGIN,
-    })
-    const controlFields = await fieldValues(loginTab)
-    check(
-      'relay fills when the login page is the active tab',
-      control?.filled === true && controlFields.includes('password=correct-horse-battery'),
-      `relay=${JSON.stringify(control)} fields=[${controlFields}]`,
-    )
-    check(
-      'username goes in the login form, not the newsletter box',
-      controlFields.includes('username=someone@example.com') && controlFields.includes('q='),
-      `fields=[${controlFields}]`,
-    )
+    const loginTabId = await activeTabId()
 
-    // -------------------------------------------------------------------- 3
-    console.log('\nScenario: origin mismatch (a look-alike phishing page)')
-    await clearFields(loginTab)
-    const mismatch = await relay({
-      username: 'someone@example.com',
-      password: 'correct-horse-battery',
-      expectedOrigin: 'https://bank.example.com',
-    })
-    const mismatchFields = await fieldValues(loginTab)
-    check(
-      'a mismatched origin is refused and nothing is typed',
-      mismatch?.filled !== true && !mismatchFields.includes('correct-horse-battery'),
-      `relay=${JSON.stringify(mismatch)} fields=[${mismatchFields}]`,
-    )
-    check(
-      'the refusal names both origins so the UI can ask',
-      mismatch?.reason === 'origin-mismatch' &&
-        mismatch?.pageOrigin === ORIGIN &&
-        mismatch?.expectedOrigin === 'https://bank.example.com',
-      `relay=${JSON.stringify(mismatch)}`,
-    )
-
-    const override = await relay({
-      username: 'someone@example.com',
-      password: 'correct-horse-battery',
-      expectedOrigin: 'https://bank.example.com',
-      overrideOrigin: ORIGIN,
-    })
-    const overrideFields = await fieldValues(loginTab)
-    check(
-      'an override naming the origin the user approved does fill',
-      override?.filled === true && overrideFields.includes('password=correct-horse-battery'),
-      `relay=${JSON.stringify(override)} fields=[${overrideFields}]`,
-    )
-
-    await clearFields(loginTab)
-    const staleOverride = await relay({
-      username: 'someone@example.com',
-      password: 'correct-horse-battery',
-      expectedOrigin: 'https://bank.example.com',
-      // The user approved a different origin; the page navigated in between.
-      overrideOrigin: 'https://somewhere-else.example',
-    })
-    const staleFields = await fieldValues(loginTab)
-    check(
-      'an override approved for a different origin is not honoured here',
-      staleOverride?.filled !== true && !staleFields.includes('correct-horse-battery'),
-      `relay=${JSON.stringify(staleOverride)} fields=[${staleFields}]`,
-    )
-
-    // ------------------------------------------------------------------- 3b
-    console.log('\nScenario: a credential saved with no site at all')
-    await clearFields(loginTab)
-    const noOrigin = await relay({
-      username: 'someone@example.com',
-      password: 'correct-horse-battery',
-      expectedOrigin: '',
-    })
-    const noOriginFields = await fieldValues(loginTab)
-    check(
-      'a credential with no stored site is not filled silently',
-      noOrigin?.filled !== true &&
-        noOrigin?.reason === 'no-stored-origin' &&
-        !noOriginFields.includes('correct-horse-battery'),
-      `relay=${JSON.stringify(noOrigin)} fields=[${noOriginFields}]`,
-    )
-    const noOriginApproved = await relay({
-      username: 'someone@example.com',
-      password: 'correct-horse-battery',
-      expectedOrigin: '',
-      overrideOrigin: ORIGIN,
-    })
-    check(
-      'and does fill once the user approves this page for it',
-      noOriginApproved?.filled === true,
-      `relay=${JSON.stringify(noOriginApproved)}`,
-    )
-
-    // -------------------------------------------------------------------- 4
-    console.log('\nScenario: a page whose only password fields are hidden')
     const harvestTab = await openTab(`${ORIGIN}/harvest`)
     await harvestTab.activate()
     await sleep(300)
-    const harvest = await relay({
+    const harvestTabId = await activeTabId()
+
+    await loginTab.activate()
+    await sleep(300)
+
+    // -------------------------------------------------------------------- 1
+    console.log('\nScenario: the toolbar popup opens on a login page')
+    let popupEval = await openToolbarPopup()
+    const popupSees = await popupEval(`new Promise((ok) =>
+      chrome.tabs.query({ active: true, currentWindow: true },
+        (t) => ok(JSON.stringify(t.map((x) => ({ id: x.id, url: x.url ?? null }))))))`)
+    check(
+      'the popup is pointed at the login page, not at the extension’s own UI',
+      JSON.parse(popupSees)[0]?.id === loginTabId,
+      `popup sees ${popupSees}; login tab is ${loginTabId}`,
+    )
+    // The whole reason for the popup: the tab underneath stays the active one.
+    // Opening the UI in a tab is what used to move the grant off the login page.
+    const stillActive = await activeTabId()
+    check(
+      'opening the popup does not make the extension the active tab',
+      stillActive === loginTabId,
+      `active tab is ${stillActive}, login tab is ${loginTabId}`,
+    )
+
+    // -------------------------------------------------------------------- 2
+    console.log('\nScenario: opening the full memory house from the popup')
+    const houseUrl = `${extPrefix}index.html`
+    const houseCount = async () => (await targets()).filter((t) => t.url.startsWith(houseUrl)).length
+    const opened = await popupEval(`new Promise((ok) =>
+      chrome.runtime.sendMessage({ type: 'wwmp-open-app' },
+        (r) => ok(chrome.runtime.lastError ? { ok: false, detail: chrome.runtime.lastError.message } : r)))`)
+    await sleep(900)
+    check(
+      'the popup can open the memory house (the toolbar click no longer can)',
+      opened?.ok === true && (await houseCount()) === 1,
+      `response=${JSON.stringify(opened)} memory-house tabs=${await houseCount()}`,
+    )
+
+    // Twice must not mean two unlocked sessions, each holding its own key.
+    popupEval = await openToolbarPopup()
+    await popupEval(`new Promise((ok) => chrome.runtime.sendMessage({ type: 'wwmp-open-app' }, () => ok(1)))`)
+    await sleep(900)
+    check(
+      'asking twice focuses the memory house instead of opening a second one',
+      (await houseCount()) === 1,
+      `memory-house tabs=${await houseCount()}`,
+    )
+
+    // -------------------------------------------------------------------- 3
+    // The old full-tab flow sent no tab id and let the worker pick the active
+    // tab. That fallback is gone: a request that names no tab is refused rather
+    // than pointed at whatever is in front of the browser, which is the whole
+    // invariant the popup buys. Asked for from the memory house — the exact
+    // caller that used to do this — it must go nowhere.
+    console.log('\nScenario: a fill request that names no tab')
+    const houseTarget = (await targets()).find((t) => t.url.startsWith(houseUrl))
+    const houseEval = await attach(houseTarget.targetId)
+    await clearFields(loginTab)
+    const fromHouse = await relayFrom(houseEval, {
       username: 'someone@example.com',
       password: 'correct-horse-battery',
       expectedOrigin: ORIGIN,
     })
-    const harvestFields = await fieldValues(harvestTab)
+    const houseFields = await fieldValues(loginTab)
     check(
-      'hidden, tiny, transparent, off-screen, disabled and covered fields are all refused',
-      harvest?.filled !== true && !harvestFields.includes('correct-horse-battery'),
-      `relay=${JSON.stringify(harvest)} fields=[${harvestFields}]`,
-    )
-    await harvestTab.close()
-
-    // -------------------------------------------------------------------- 5
-    console.log('\nScenario: repeated fills (content-script listener stacking)')
-    await loginTab.activate()
-    await sleep(300)
-    await clearFields(loginTab)
-    await loginTab.evaluate(`(window.__fillCount = 0,
-      document.querySelector('input[type=password]')
-        .addEventListener('input', () => window.__fillCount++), true)`)
-    for (let i = 0; i < 3; i++) {
-      await relay({ username: 'u', password: 'p', expectedOrigin: ORIGIN })
-      await sleep(150)
-    }
-    const fills = await loginTab.evaluate(`window.__fillCount`)
-    check(
-      'three fills fire three input events, not six or nine',
-      fills === 3,
-      `input events on the password field: ${fills}`,
+      'a request naming no tab is refused, not retargeted at the active one',
+      fromHouse?.filled !== true &&
+        fromHouse?.reason === 'no-such-tab' &&
+        !houseFields.includes('correct-horse-battery'),
+      `relay=${JSON.stringify(fromHouse)} fields=[${houseFields}]`,
     )
 
-    // -------------------------------------------------------------------- 6
+    // -------------------------------------------------------------------- 4
     console.log('\nScenario: a plain web page trying to reach the extension')
     const pageReach = await loginTab.evaluate(
       `typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage
@@ -436,7 +446,204 @@ async function runSuite({ extDir, browser, port, label }) {
       `fields=[${afterSpoof}]`,
     )
 
-    await extTab.close()
+    // --------------------------------------------------------------------
+    // Everything past here types into a page, so it needs the grant.
+    if (!hasGrant) {
+      console.log(
+        '\n  (The fill checks themselves run in pass 2: they need the activeTab\n' +
+          '   grant, and no script can click a toolbar button.)',
+      )
+      await harvestTab.close()
+      await loginTab.close()
+      return results
+    }
+
+    await loginTab.activate()
+    await sleep(300)
+    popupEval = await openToolbarPopup()
+    /** Fill from the popup, naming the tab the popup showed the user. */
+    const fill = (request) => relayFrom(popupEval, { tabId: loginTabId, ...request })
+
+    // -------------------------------------------------------------------- 5
+    console.log('\nScenario: filling the login page from the popup')
+    await clearFields(loginTab)
+    const filled = await fill({
+      username: 'someone@example.com',
+      password: 'correct-horse-battery',
+      expectedOrigin: ORIGIN,
+    })
+    const filledFields = await fieldValues(loginTab)
+    check(
+      'autofill reaches the login page from the popup',
+      filled?.filled === true && filledFields.includes('password=correct-horse-battery'),
+      `relay=${JSON.stringify(filled)} fields=[${filledFields}]`,
+    )
+    check(
+      'username goes in the login form, not the newsletter box',
+      filledFields.includes('username=someone@example.com') && filledFields.includes('q='),
+      `fields=[${filledFields}]`,
+    )
+
+    // -------------------------------------------------------------------- 6
+    console.log('\nScenario: origin mismatch (a look-alike phishing page)')
+    await clearFields(loginTab)
+    const mismatch = await fill({
+      username: 'someone@example.com',
+      password: 'correct-horse-battery',
+      expectedOrigin: 'https://bank.example.com',
+    })
+    const mismatchFields = await fieldValues(loginTab)
+    check(
+      'a mismatched origin is refused and nothing is typed',
+      mismatch?.filled !== true && !mismatchFields.includes('correct-horse-battery'),
+      `relay=${JSON.stringify(mismatch)} fields=[${mismatchFields}]`,
+    )
+    check(
+      'the refusal names both origins so the UI can ask',
+      mismatch?.reason === 'origin-mismatch' &&
+        mismatch?.pageOrigin === ORIGIN &&
+        mismatch?.expectedOrigin === 'https://bank.example.com',
+      `relay=${JSON.stringify(mismatch)}`,
+    )
+
+    const override = await fill({
+      username: 'someone@example.com',
+      password: 'correct-horse-battery',
+      expectedOrigin: 'https://bank.example.com',
+      overrideOrigin: ORIGIN,
+    })
+    const overrideFields = await fieldValues(loginTab)
+    check(
+      'an override naming the origin the user approved does fill',
+      override?.filled === true && overrideFields.includes('password=correct-horse-battery'),
+      `relay=${JSON.stringify(override)} fields=[${overrideFields}]`,
+    )
+
+    await clearFields(loginTab)
+    const staleOverride = await fill({
+      username: 'someone@example.com',
+      password: 'correct-horse-battery',
+      expectedOrigin: 'https://bank.example.com',
+      // The user approved a different origin; the page navigated in between.
+      overrideOrigin: 'https://somewhere-else.example',
+    })
+    const staleFields = await fieldValues(loginTab)
+    check(
+      'an override approved for a different origin is not honoured here',
+      staleOverride?.filled !== true && !staleFields.includes('correct-horse-battery'),
+      `relay=${JSON.stringify(staleOverride)} fields=[${staleFields}]`,
+    )
+
+    // ------------------------------------------------------------------- 6b
+    console.log('\nScenario: a credential saved with no site at all')
+    await clearFields(loginTab)
+    const noOrigin = await fill({
+      username: 'someone@example.com',
+      password: 'correct-horse-battery',
+      expectedOrigin: '',
+    })
+    const noOriginFields = await fieldValues(loginTab)
+    check(
+      'a credential with no stored site is not filled silently',
+      noOrigin?.filled !== true &&
+        noOrigin?.reason === 'no-stored-origin' &&
+        !noOriginFields.includes('correct-horse-battery'),
+      `relay=${JSON.stringify(noOrigin)} fields=[${noOriginFields}]`,
+    )
+    const noOriginApproved = await fill({
+      username: 'someone@example.com',
+      password: 'correct-horse-battery',
+      expectedOrigin: '',
+      overrideOrigin: ORIGIN,
+    })
+    check(
+      'and does fill once the user approves this page for it',
+      noOriginApproved?.filled === true,
+      `relay=${JSON.stringify(noOriginApproved)}`,
+    )
+
+    // -------------------------------------------------------------------- 7
+    // The login tab stays the active one throughout: the fill has to follow the
+    // tab id the popup showed the user, not whatever is in front of the browser.
+    console.log('\nScenario: a page whose only password fields are hidden')
+    await clearFields(loginTab)
+    const harvest = await relayFrom(popupEval, {
+      tabId: harvestTabId,
+      username: 'someone@example.com',
+      password: 'correct-horse-battery',
+      expectedOrigin: ORIGIN,
+    })
+    const harvestFields = await fieldValues(harvestTab)
+    const loginUntouched = await fieldValues(loginTab)
+    check(
+      'hidden, tiny, transparent, off-screen, disabled and covered fields are all refused',
+      harvest?.filled !== true && !harvestFields.includes('correct-horse-battery'),
+      `relay=${JSON.stringify(harvest)} fields=[${harvestFields}]`,
+    )
+    check(
+      'the named tab is the one filled, not whichever tab is active',
+      harvest?.reason === 'no-password-field' && !loginUntouched.includes('correct-horse-battery'),
+      `relay=${JSON.stringify(harvest)} active(login) fields=[${loginUntouched}]`,
+    )
+    const goneTab = await relayFrom(popupEval, {
+      tabId: 999999,
+      username: 'u',
+      password: 'p',
+      expectedOrigin: ORIGIN,
+    })
+    check(
+      'a tab that no longer exists is refused rather than redirected somewhere',
+      goneTab?.filled !== true && goneTab?.reason === 'no-such-tab',
+      `relay=${JSON.stringify(goneTab)}`,
+    )
+
+    // ------------------------------------------------------------------- 7b
+    // The gap between the popup resolving a tab and the user clicking Fill is a
+    // whole Argon2id derivation wide — over a second — and a page can navigate
+    // inside it. The password must not be delivered to the page that arrived in
+    // the meantime, and "delivered" means handed to its renderer at all, not
+    // merely typed into it: the content script refusing to type is too late if
+    // the plaintext is already in a process the attacker controls.
+    console.log('\nScenario: the page navigates after the popup resolved it')
+    await clearFields(loginTab)
+    await loginTab.evaluate(`(location.href = ${JSON.stringify(`${OTHER_ORIGIN}/login`)}, true)`)
+    await sleep(900)
+    const navigatedAway = await fill({
+      username: 'someone@example.com',
+      password: 'correct-horse-battery',
+      expectedOrigin: ORIGIN,
+    })
+    const navigatedFields = await fieldValues(loginTab)
+    check(
+      'a tab that navigated to another origin is refused, naming where it went',
+      navigatedAway?.filled !== true &&
+        navigatedAway?.reason === 'origin-mismatch' &&
+        navigatedAway?.pageOrigin === OTHER_ORIGIN &&
+        !navigatedFields.includes('correct-horse-battery'),
+      `relay=${JSON.stringify(navigatedAway)} fields=[${navigatedFields}]`,
+    )
+    // Back where it started, so the checks below still mean what they say.
+    await loginTab.evaluate(`(location.href = ${JSON.stringify(`${ORIGIN}/login`)}, true)`)
+    await sleep(900)
+
+    // -------------------------------------------------------------------- 8
+    console.log('\nScenario: repeated fills (content-script listener stacking)')
+    await clearFields(loginTab)
+    await loginTab.evaluate(`(window.__fillCount = 0,
+      document.querySelector('input[type=password]')
+        .addEventListener('input', () => window.__fillCount++), true)`)
+    for (let i = 0; i < 3; i++) {
+      await fill({ username: 'u', password: 'p', expectedOrigin: ORIGIN })
+      await sleep(150)
+    }
+    const fills = await loginTab.evaluate(`window.__fillCount`)
+    check(
+      'three fills fire three input events, not six or nine',
+      fills === 3,
+      `input events on the password field: ${fills}`,
+    )
+
+    await harvestTab.close()
     await loginTab.close()
   } finally {
     try {
@@ -457,50 +664,51 @@ async function main() {
   if (!browser) throw new Error('no Chrome or Edge found in the usual install locations')
   console.log(`Browser: ${browser}`)
 
-  const server = await startServer()
+  const build = await checkShippedBuild()
+  const servers = await Promise.all([startServer(PORT), startServer(OTHER_PORT)])
   let shipped = []
-  let diagnostic = []
+  let granted = []
   try {
     shipped = await runSuite({
       extDir: DIST,
       browser,
       port: DEBUG_PORT,
       label: 'PASS 1 — the extension exactly as shipped',
+      hasGrant: false,
     })
     const scratch = await scratchBuildWithHostPermission()
-    diagnostic = await runSuite({
+    granted = await runSuite({
       extDir: scratch,
       browser,
       port: DEBUG_PORT + 1,
-      label: 'PASS 2 — DIAGNOSTIC ONLY: same build plus a host permission for the test origin',
+      label:
+        'PASS 2 — the same shipped code, with the activeTab grant a toolbar click ' +
+        'would give it standing in as a host permission',
+      hasGrant: true,
     })
   } finally {
-    server.close()
+    servers.forEach((s) => s.close())
   }
 
-  const failedShipped = shipped.filter((r) => !r.passed)
-  const failedDiag = diagnostic.filter((r) => !r.passed)
+  const failed = [...build, ...shipped, ...granted].filter((r) => !r.passed)
+  const total = build.length + shipped.length + granted.length
 
   console.log('\n════════ summary ════════')
-  console.log(`  as shipped:  ${shipped.length - failedShipped.length}/${shipped.length} passed`)
-  console.log(`  diagnostic:  ${diagnostic.length - failedDiag.length}/${diagnostic.length} passed`)
-  if (failedShipped.length > failedDiag.length) {
-    console.log(
-      '\n  The checks that fail as shipped but pass with a host permission are not\n' +
-        '  fill-logic bugs: the fill logic is sound. They fail because `activeTab` is\n' +
-        '  never granted for the tab being filled — the toolbar click opens the UI in\n' +
-        '  a NEW tab, so the grant lands on the page the user was looking at while the\n' +
-        '  request targets the extension\'s own tab. Autofill cannot work from a full\n' +
-        '  tab; that is the popup-versus-tab question in decisions/0009.\n' +
-        '\n  Expect this script to stay red until 0009 item 3 is decided.',
-    )
-  }
-  if (failedShipped.length) {
-    console.error(`\nFAILED — ${failedShipped.length} of ${shipped.length} checks against the shipped build:`)
-    failedShipped.forEach((f) => console.error(`  - ${f.name}`))
+  console.log(`  shipped build:      ${build.filter((r) => r.passed).length}/${build.length} passed`)
+  console.log(`  as shipped:         ${shipped.filter((r) => r.passed).length}/${shipped.length} passed`)
+  console.log(`  grant simulated:    ${granted.filter((r) => r.passed).length}/${granted.length} passed`)
+  console.log(
+    '\n  Pass 2 runs the shipped popup, the shipped worker and the shipped content\n' +
+      '  script; the only thing it fakes is the activeTab grant, because the browser\n' +
+      '  confers that on a real toolbar click and CDP cannot click one. The README\n' +
+      '  carries the one manual click that closes that last gap.',
+  )
+  if (failed.length) {
+    console.error(`\nFAILED — ${failed.length} of ${total} checks:`)
+    failed.forEach((f) => console.error(`  - ${f.name}`))
     process.exitCode = 1
   } else {
-    console.log('\nAll autofill checks passed against the shipped build.')
+    console.log(`\nAll ${total} autofill checks passed.`)
   }
 }
 

@@ -52,10 +52,21 @@ export default function Popup() {
     })()
   }, [])
 
+  // A second handle on the key, deliberately outside React state. Zeroing it
+  // from inside a `setState` updater works only if React gets around to running
+  // that updater, and on `pagehide` — the popup being torn down, which is how
+  // this context normally ends — there is no render left to run it in. The ref
+  // is what makes the sentence below actually true.
+  const keyRef = useRef<Uint8Array | null>(null)
+
   // Best effort, same as the full tab: dropping the reference is not enough on
   // its own, so the key bytes are overwritten before this context goes away.
   useEffect(() => {
-    const wipe = () => setUnlocked((u) => (u?.rawKey.fill(0), null))
+    const wipe = () => {
+      keyRef.current?.fill(0)
+      keyRef.current = null
+      setUnlocked(null)
+    }
     window.addEventListener('pagehide', wipe)
     const onRemoteLock = (event: MessageEvent) => {
       if (event.data === 'lock') {
@@ -71,7 +82,9 @@ export default function Popup() {
   }, [])
 
   const lock = () => {
-    setUnlocked((u) => (u?.rawKey.fill(0), null))
+    keyRef.current?.fill(0)
+    keyRef.current = null
+    setUnlocked(null)
     lockChannel?.postMessage('lock')
     setPhase('locked')
   }
@@ -98,11 +111,13 @@ export default function Popup() {
         <Unlock
           stored={stored}
           onUnlock={(rawKey, data, currentStored) => {
+            keyRef.current = rawKey
             setStored(currentStored)
             setUnlocked({ rawKey, data })
             setPhase('unlocked')
-            // Every unlock is a rehearsal, wherever it happens.
-            void recordPracticeUnlock()
+            // Every unlock is a rehearsal, wherever it happens. A practice
+            // record that fails to write must not take the unlock down with it.
+            void recordPracticeUnlock().catch(() => {})
           }}
         />
       )}
@@ -155,13 +170,23 @@ function Header({ target }: { target: TargetTabResult }) {
       <h1 className="font-display text-base leading-tight text-dusk">Where Was My Password</h1>
       {target.tab ? (
         <p className="truncate text-xs text-dusk/70">
-          Filling into <strong className="text-dusk">{target.tab.host}</strong>
+          Filling into <strong className="text-dusk">{targetLabel(target.tab)}</strong>
         </p>
       ) : (
-        <p className="text-xs text-brick">{problem}</p>
+        problem !== '' && <p className="text-xs text-brick">{problem}</p>
       )}
     </header>
   )
+}
+
+/**
+ * What to call the page, the way a browser's address bar does: the bare host
+ * over https, and the whole origin otherwise. Saying only the host would print
+ * "github.com" for `http://github.com` and for `https://github.com:8443` alike,
+ * and naming the page correctly is the single job this line has.
+ */
+function targetLabel(tab: { origin: string; host: string }): string {
+  return tab.origin === `https://${tab.host}` ? tab.host : tab.origin
 }
 
 function Unlock({
@@ -179,10 +204,14 @@ function Unlock({
     if (!phrase.trim() || busy) return
     setBusy(true)
     setError(null)
+    // Held locally so a failed unlock does not leave a derived key behind: a key
+    // from a wrong guess is not worth much, but it costs nothing to drop it.
+    // Cleared, not zeroed, once it has been handed on — the session owns it then.
+    let derived: Uint8Array | null = null
     try {
-      const rawKey = await deriveKey(phrase, fromBase64(stored.salt), stored.kdfParams)
+      derived = await deriveKey(phrase, fromBase64(stored.salt), stored.kdfParams)
       const data = await decryptVault(
-        rawKey,
+        derived,
         { iv: fromBase64(stored.iv), ciphertext: fromBase64(stored.ciphertext) },
         stored,
       )
@@ -190,7 +219,8 @@ function Unlock({
       // fills from the toolbar and never opens the full tab would otherwise sit
       // on the settings their vault was created with forever. It is not
       // announced here — there is no room, and the full tab says it.
-      const brought = await upgradeOnUnlock(phrase, rawKey, data, stored)
+      const brought = await upgradeOnUnlock(phrase, derived, data, stored)
+      derived = null
       setPhrase('')
       onUnlock(brought.rawKey, data, brought.stored)
     } catch (err) {
@@ -200,6 +230,7 @@ function Unlock({
           : `Unlock failed: ${err instanceof Error ? err.message : String(err)}`,
       )
     } finally {
+      derived?.fill(0)
       setBusy(false)
     }
   }
@@ -319,13 +350,17 @@ function Row({
   useEffect(() => () => window.clearTimeout(closeTimer.current), [])
 
   const fill = async (overrideOrigin?: string) => {
-    if (busy) return
+    // No target means no fill, full stop. The worker refuses a request with no
+    // tab id rather than picking one, so this only decides which of the two says
+    // so — but the button is disabled below, and this is the guard that makes
+    // that a rule instead of a rendering detail.
+    if (busy || !target.tab) return
     window.clearTimeout(closeTimer.current)
     setBusy(true)
     setStatus('Filling…')
     setMismatch(null)
     const result = await requestAutofill({
-      tabId: target.tab?.tabId,
+      tabId: target.tab.tabId,
       username: cred.username,
       password: cred.password,
       expectedOrigin: credentialOrigin(cred.url),
@@ -354,7 +389,6 @@ function Row({
     const messages: Record<string, string> = {
       'no-password-field': 'No login field on this page',
       'no-page-tab': 'This tab can’t be filled',
-      'no-active-tab': 'No page to fill',
       'no-such-tab': 'That page is gone — reopen the popup',
       'not-in-extension': 'Autofill needs the extension',
       'content-script-unreachable': 'The browser won’t let extensions touch this page',
@@ -382,7 +416,11 @@ function Row({
         </div>
         <Button
           className="shrink-0 !px-3 !py-1 !text-sm"
-          disabled={busy}
+          // There is nowhere to fill when the target could not be resolved. The
+          // header says why; an enabled button there would only invite a click
+          // that cannot do anything but go wrong.
+          disabled={busy || !target.tab}
+          title={target.tab ? undefined : 'No page to fill'}
           onClick={() => void fill()}
         >
           Fill

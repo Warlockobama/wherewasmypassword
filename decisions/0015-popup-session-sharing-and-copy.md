@@ -39,6 +39,12 @@ phrase. Against the compromised-browser threat model in `0008` neither design
 survives, so the honest framing is that this weakens an unattended-machine
 property, not the malware one.
 
+**The flip side, worth knowing before answering:** "the browser destroys the
+popup on blur" is the *only* thing that ends a popup session today — there is no
+idle timer in it, so a popup that somehow keeps focus (devtools attached to it,
+for instance) holds the key for as long as it is open. If the answer here is yes,
+an explicit auto-lock has to come with it rather than after it.
+
 ## 2. Should the popup offer Copy as well as Fill?
 
 **How it works today:** it does not — Fill only. The full tab still has Copy.

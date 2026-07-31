@@ -170,10 +170,16 @@
     // Only accept messages from our own extension.
     if (sender.id !== chrome.runtime.id) return false
 
-    // Never fill our own UI, whatever the worker thought it was targeting.
-    // The worker's guard reads `tab.url`, which an extension holding only
-    // `activeTab` cannot see, so this is the check that actually runs.
-    if (location.protocol === 'chrome-extension:' || location.protocol === 'moz-extension:') {
+    // Only ordinary web pages, ever. This is stricter than "not our own UI" on
+    // purpose: `location.origin` is the literal string "null" for a `file://`,
+    // `data:` or sandboxed document, so every one of them canonicalises to the
+    // same value below. A user with file access enabled would be shown the
+    // "no site saved against this password" card naming **null**, and clicking
+    // "Fill anyway" would hand back `overrideOrigin: "null"` — which matches,
+    // fills, and then goes on matching every other opaque-origin document the
+    // tab visits, defeating the whole point of carrying the approved origin
+    // rather than a boolean.
+    if (location.protocol !== 'http:' && location.protocol !== 'https:') {
       sendResponse({ ok: false, filled: false, reason: 'no-page-tab' })
       return false
     }
