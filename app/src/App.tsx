@@ -358,6 +358,13 @@ export default function App() {
           rawKey={unlocked.rawKey}
           onCancel={() => setPhase('unlocked')}
           onDone={(nextKey, nextData, nextStored) => {
+            // Any other copy of the UI is holding the key to the vault that no
+            // longer exists, on the salt that no longer exists. If it saved a
+            // credential it would write the whole record back under the old
+            // key, quietly undoing the change the user just made — so they are
+            // locked. A BroadcastChannel does not deliver to its own sender, so
+            // this tab stays open.
+            lockChannel?.postMessage('lock')
             setUnlocked({ rawKey: nextKey, data: nextData })
             setStored(nextStored)
             setMeta(freshPracticeMeta(Date.now()))
