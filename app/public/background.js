@@ -26,6 +26,39 @@ try {
   /* the API is absent entirely; same default applies */
 }
 
+/** Kept in step with `SESSION_ITEM` in `src/popup/session.ts`. */
+const POPUP_SESSION_ITEM = 'popup-session'
+
+/**
+ * Delete a parked key whose deadline has passed.
+ *
+ * `session.ts` refuses an expired session, so nothing can *use* one — but
+ * refusing is not deleting, and until something deletes it the bytes are still
+ * sitting in browser memory for a debugger or an extension-context compromise
+ * to find. Nothing in an extension page can run at the deadline: the popup that
+ * parked the key was destroyed the moment the user clicked away.
+ *
+ * This worker is the only thing that runs without a page, so it sweeps every
+ * time it starts — which is every message, every browser start, every wake. It
+ * is not a timer and does not pretend to be one: it closes the gap whenever the
+ * extension is used again, and the browser closing empties this storage area
+ * outright. `decisions/0017` asks whether the remainder is worth an alarm.
+ */
+async function sweepExpiredPopupSession() {
+  try {
+    const record = (await chrome.storage.session.get(POPUP_SESSION_ITEM))[POPUP_SESSION_ITEM]
+    if (!record) return
+    if (typeof record.expiresAt !== 'number' || record.expiresAt <= Date.now()) {
+      await chrome.storage.session.remove(POPUP_SESSION_ITEM)
+    }
+  } catch {
+    // Nothing to be done about a storage area that will not answer, and this
+    // must never be the reason the worker fails to start.
+  }
+}
+
+sweepExpiredPopupSession()
+
 /**
  * Open the full palace tab — or focus the one already open. Each tab is a
  * separate unlocked session with its own key and its own timers, so clicking

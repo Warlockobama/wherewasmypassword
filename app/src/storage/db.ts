@@ -117,6 +117,38 @@ export async function loadArchivedVault(): Promise<StoredVault | undefined> {
 }
 
 /**
+ * Put the archived vault back and drop the archive, returning the record that
+ * is now live — or undefined if there was nothing to undo.
+ *
+ * This is what makes the archive worth writing. Until `decisions/0016` nothing
+ * ever read it back, so the restore dialog's promise that "the current vault is
+ * kept aside" was true on disk and unreachable from the UI: one wrong file and
+ * a vault with no other copy was gone.
+ *
+ * Both halves happen in one transaction, so there is no instant where the
+ * archive has been consumed and the live record has not been written — a
+ * crash in the middle of *that* would lose both.
+ *
+ * The archive is dropped rather than kept for a second undo: what it replaces
+ * is the backup file the user chose a moment ago, which they still have, and an
+ * archive that survived its own undo would offer to put back a vault that had
+ * already been put back.
+ */
+export async function undoRestore(): Promise<StoredVault | undefined> {
+  const database = await db()
+  const tx = database.transaction('vault', 'readwrite')
+  const archived = await tx.store.get(PREVIOUS_VAULT_KEY)
+  if (!archived) {
+    await tx.done
+    return undefined
+  }
+  await tx.store.put(archived, VAULT_KEY)
+  await tx.store.delete(PREVIOUS_VAULT_KEY)
+  await tx.done
+  return archived
+}
+
+/**
  * Drop the archived copy.
  *
  * Changing the master passphrase is the one operation where keeping it would

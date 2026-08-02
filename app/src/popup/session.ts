@@ -23,6 +23,15 @@ import type { StoredVault } from '../storage/db.ts'
  *   timer would forgive a suspended laptop the entire time it was asleep, which
  *   is the bug `decisions/0008` already fixed once for the full tab.
  *
+ * Refusing an expired session and *deleting* it are not the same moment, and it
+ * is worth being exact about which is guaranteed. Refusal is: past the deadline
+ * nothing here will hand the key back. Deletion happens on the next popup open,
+ * on the next start of the extension's worker (`public/background.js` sweeps
+ * it), and unconditionally when the browser closes and this storage area goes
+ * with it — so a key can sit unusable in browser memory for a while if the
+ * extension is never touched again. See `decisions/0017` for whether that gap
+ * is worth an alarm to close.
+ *
  * What this gives up is stated plainly in `0015`: for those five minutes a
  * laptop left unattended will fill passwords without the phrase, and anything
  * that can run code in the extension's own context can read the key. Against a
@@ -41,8 +50,25 @@ import type { StoredVault } from '../storage/db.ts'
  */
 export const POPUP_SESSION_MS = 5 * 60 * 1000
 
+/**
+ * Kept in step with the sweep in `public/background.js`, which cannot import
+ * this module — a worker that disagreed about the item name would never clear
+ * anything.
+ */
 const SESSION_ITEM = 'popup-session'
 const PREFERENCE_ITEM = 'popup-session-enabled'
+
+/**
+ * Bumped by every clear.
+ *
+ * Parking a key is not one operation: it reads the preference, then writes.
+ * A "Lock" landing between those two would be undone by the write that follows
+ * it, and the next popup would open unlocked after the user explicitly locked.
+ * The counter is what lets the write notice that it was overtaken. Both live in
+ * the same popup, so a module-level counter is the whole of the coordination
+ * needed.
+ */
+let clearGeneration = 0
 
 /** What is parked in `chrome.storage.session`. */
 interface SessionRecord {
@@ -105,6 +131,27 @@ export async function setPopupSessionEnabled(enabled: boolean): Promise<void> {
 }
 
 /**
+ * Call `onChange` whenever the preference is changed anywhere, and return the
+ * function that stops watching.
+ *
+ * The switch exists in two places — the popup and the memory house — and a
+ * security setting that shows one answer in one window and the opposite in
+ * another is worse than only offering it once.
+ */
+export function watchPopupSessionPreference(onChange: (enabled: boolean) => void): () => void {
+  if (!isExtensionContext() || !chrome.storage?.onChanged) return () => {}
+  const listener = (
+    changes: Record<string, chrome.storage.StorageChange>,
+    areaName: string,
+  ) => {
+    if (areaName !== 'local' || !(PREFERENCE_ITEM in changes)) return
+    onChange(changes[PREFERENCE_ITEM].newValue === true)
+  }
+  chrome.storage.onChanged.addListener(listener)
+  return () => chrome.storage.onChanged.removeListener(listener)
+}
+
+/**
  * Park the key for the rest of the session, if the user has opted in.
  *
  * `expiresAt` is the deadline of the popup that is calling, so a popup which
@@ -118,11 +165,37 @@ export async function startPopupSession(
 ): Promise<void> {
   const store = sessionArea()
   if (!store) return
+  // Encoded before anything is awaited. The popup can be torn down mid-call,
+  // and the `pagehide` wipe zeroes this array in place — encoding afterwards
+  // would park thirty-two zero bytes that open nothing.
+  const key = toBase64(rawKey)
+  const generation = clearGeneration
   // The opt-in is checked here, at the only place that writes, so that it
   // cannot be bypassed by a caller that forgets.
   if (!(await popupSessionEnabled())) return
-  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return
-  await store.set({ [SESSION_ITEM]: { key: toBase64(rawKey), salt, expiresAt } })
+  if (!withinLimit(expiresAt)) return
+  // A lock that landed while the preference was being read has already had its
+  // say. Writing now would quietly undo it.
+  if (generation !== clearGeneration) return
+  await store.set({ [SESSION_ITEM]: { key, salt, expiresAt } })
+  // And once more after the write, since the same race runs across it.
+  if (generation !== clearGeneration) await clearPopupSession()
+}
+
+/**
+ * Whether a deadline is one this code could have written: in the future, and
+ * no further off than a whole session.
+ *
+ * The upper bound is the part that does real work. Without it the promise on
+ * the checkbox is only as good as whoever wrote the record — a clock stepped
+ * backwards (an NTP correction after a suspend, a dual-boot machine disagreeing
+ * about the RTC) would leave a live session running for the length of the step,
+ * with the countdown in the popup cheerfully showing sixty-five minutes.
+ */
+function withinLimit(expiresAt: number): boolean {
+  if (!Number.isFinite(expiresAt)) return false
+  const now = Date.now()
+  return expiresAt > now && expiresAt <= now + POPUP_SESSION_MS
 }
 
 /**
@@ -150,7 +223,7 @@ export async function resumePopupSession(stored: StoredVault): Promise<PopupSess
   } catch {
     record = null
   }
-  if (!record || record.salt !== stored.salt || record.expiresAt <= Date.now()) {
+  if (!record || record.salt !== stored.salt || !withinLimit(record.expiresAt)) {
     await clearPopupSession()
     return null
   }
@@ -175,18 +248,23 @@ export async function resumePopupSession(stored: StoredVault): Promise<PopupSess
 /**
  * End the parked session.
  *
- * Called by every lock, wherever it happens — the popup's own Lock button, a
- * lock broadcast from a memory-house tab, a passphrase change, a deleted vault.
- * The `wwmp-lock` broadcast alone would not do: it only reaches pages that
- * happen to be open, and the whole point of the parked key is that it survives
- * with no page open at all.
+ * Called by every lock a person asked for, wherever they asked for it — the
+ * popup's Lock button, "Lock now" in the memory house, a passphrase change, a
+ * restored or deleted vault. Deliberately *not* by a lock broadcast being
+ * received: an idle timer in some other tab is that tab minding its own key,
+ * and the tab whose user pressed Lock clears this itself before broadcasting.
+ *
+ * A broadcast could not carry this anyway. It reaches only pages that happen to
+ * be open, and the whole point of the parked key is that it survives with none.
  *
  * The bytes cannot be zeroed the way an in-process key can — they are a string
- * in the browser's own storage — so the record is removed and the browser is
- * left to collect it. That is the honest limit of this, and the reason the
- * deadline is short.
+ * in storage the browser owns — so the record is removed and the browser is
+ * left to collect it.
  */
 export async function clearPopupSession(): Promise<void> {
+  // Bumped even when there is no storage area to clear, so that a caller
+  // racing a park is stopped in every context.
+  clearGeneration++
   const store = sessionArea()
   if (!store) return
   try {

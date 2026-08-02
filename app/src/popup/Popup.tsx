@@ -96,6 +96,12 @@ export default function Popup() {
   }
 
   useEffect(() => {
+    // A key resumed after this effect has been torn down belongs to nobody: no
+    // auto-lock is watching it and no `pagehide` wipe will reach it, because
+    // the handler that would have has already been removed. Under React's
+    // development double-invoke that is not hypothetical — the first run's key
+    // would be overwritten in `keyRef` and never zeroed.
+    let live = true
     void (async () => {
       // All three are independent of each other and the popup has to paint fast.
       const [vault, tab, enabled] = await Promise.all([
@@ -103,11 +109,16 @@ export default function Popup() {
         resolveTargetTab(),
         popupSessionEnabled(),
       ])
+      if (!live) return
       setTarget(tab)
       setStaying(enabled)
       setStored(vault ?? null)
       if (!vault) {
         setPhase('no-vault')
+        // Whatever is parked cannot belong to a vault that is not there — a
+        // deletion elsewhere whose clear did not land, most likely. This is the
+        // one branch that would otherwise never sweep.
+        await clearPopupSession()
         return
       }
       // A session the user opted into, if there is one still running. It is
@@ -122,6 +133,10 @@ export default function Popup() {
             { iv: fromBase64(vault.iv), ciphertext: fromBase64(vault.ciphertext) },
             vault,
           )
+          if (!live) {
+            session.rawKey.fill(0)
+            return
+          }
           keyRef.current = session.rawKey
           setUnlocked({ rawKey: session.rawKey, data })
           setDeadline(session.expiresAt)
@@ -138,8 +153,11 @@ export default function Popup() {
           await clearPopupSession()
         }
       }
-      setPhase('locked')
+      if (live) setPhase('locked')
     })()
+    return () => {
+      live = false
+    }
   }, [])
 
   // Best effort, same as the full tab: dropping the reference is not enough on
@@ -203,8 +221,9 @@ export default function Popup() {
    */
   const toggleStaying = (on: boolean) => {
     void (async () => {
-      // The switch on screen follows the write rather than leading it, so a
-      // storage area that refuses leaves the user looking at the truth.
+      // The switch on screen follows the preference write rather than leading
+      // it, so a storage area that refuses leaves the user looking at what is
+      // actually stored.
       await setPopupSessionEnabled(on)
       setStaying(on)
       if (on && keyRef.current && stored && deadline !== null) {

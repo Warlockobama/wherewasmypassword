@@ -15,7 +15,11 @@ import {
   editCredential,
   deleteCredential,
 } from '../credentials/vault-credentials.ts'
-import { popupSessionEnabled, setPopupSessionEnabled } from '../popup/session.ts'
+import {
+  popupSessionEnabled,
+  setPopupSessionEnabled,
+  watchPopupSessionPreference,
+} from '../popup/session.ts'
 
 export default function UnlockedHome({
   data,
@@ -155,6 +159,17 @@ export default function UnlockedHome({
       <p className="-mt-2 text-center text-sm text-dusk/70">
         Created {new Date(data.createdAt).toLocaleDateString()} · next practice{' '}
         {daysUntilPractice === 0 ? 'today' : `in ${daysUntilPractice} day${daysUntilPractice === 1 ? '' : 's'}`}
+      </p>
+      {/* On screen because nothing here can prove a vault record was not
+          swapped for an older one — the defences against that all need an
+          anchor a browser profile cannot give us. A date the owner recognises
+          is the honest substitute: it makes a rollback noticeable, which is
+          the most this can offer (`decisions/0016`). */}
+      <p
+        className="-mt-3 text-center text-xs text-dusk/50"
+        title="If this is older than the last change you remember making, this device may be holding an older copy of your vault."
+      >
+        Vault last changed {new Date(stored.updatedAt).toLocaleString()}
       </p>
 
       {/* Silent re-encryption would be the wrong kind of quiet: the vault on
@@ -302,6 +317,10 @@ function PopupSessionSetting() {
     void popupSessionEnabled()
       .then(setEnabled)
       .catch(() => setEnabled(false))
+    // The same setting has a switch in the popup, and a security setting
+    // showing two different answers in two places is worse than not offering it
+    // twice. Whichever one is used, both follow.
+    return watchPopupSessionPreference(setEnabled)
   }, [])
 
   // Nothing to offer when there is no popup — the same bundle is also served as

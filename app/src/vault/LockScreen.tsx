@@ -1,8 +1,15 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { deriveKey } from '../crypto/kdf.ts'
 import { decryptVault, fromBase64, WrongPassphraseError, type VaultData } from '../crypto/vault.ts'
 import { parseBackup } from '../storage/backup.ts'
-import { archiveCurrentVault, saveVault, type StoredVault } from '../storage/db.ts'
+import {
+  archiveCurrentVault,
+  loadArchivedVault,
+  saveVault,
+  undoRestore,
+  type StoredVault,
+} from '../storage/db.ts'
+import { clearPopupSession } from '../popup/session.ts'
 import { upgradeNeeded, upgradeOnUnlock } from './seal.ts'
 import { Button, Panel, Screen, Title } from '../ui.tsx'
 
@@ -21,12 +28,22 @@ export default function LockScreen({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pendingRestore, setPendingRestore] = useState<StoredVault | null>(null)
+  // The vault a restore replaced, if one is still set aside. Its presence is
+  // the whole condition for offering the undo (`decisions/0016`).
+  const [archived, setArchived] = useState<StoredVault | null>(null)
+  const [confirmingUndo, setConfirmingUndo] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   // Shown while the vault is being brought forward, because on an old vault
   // that is a second Argon2id run and the wait roughly doubles. Silence there
   // reads as a hang.
   const [upgrading, setUpgrading] = useState(false)
+
+  useEffect(() => {
+    void loadArchivedVault()
+      .then((v) => setArchived(v ?? null))
+      .catch(() => setArchived(null))
+  }, [])
 
   const unlock = async () => {
     if (!phrase.trim() || busy) return
@@ -77,11 +94,38 @@ export default function LockScreen({
     try {
       await archiveCurrentVault()
       await saveVault(pendingRestore)
+      // Whatever a popup is holding belongs to the vault that was just replaced.
+      // Its salt no longer matches, so it would be refused anyway; not leaving
+      // it parked for five minutes is cheaper than reasoning about that.
+      await clearPopupSession()
+      // `stored` is what was live a moment ago, which is what was just set
+      // aside — so the undo appears without a second trip to the database.
+      setArchived(stored)
       onRestored(pendingRestore)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setPendingRestore(null)
+    }
+  }
+
+  /**
+   * Put back the vault this device had before the restore.
+   *
+   * Deliberately not offered as "are you sure" on a hair trigger: it replaces
+   * the vault that is live now, which is the file the user chose. That file is
+   * still on their disk, which is why one confirmation is enough.
+   */
+  const confirmUndo = async () => {
+    try {
+      const back = await undoRestore()
+      setArchived(null)
+      setConfirmingUndo(false)
+      if (!back) return
+      await clearPopupSession()
+      onRestored(back)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -136,8 +180,8 @@ export default function LockScreen({
           <p>
             This replaces the vault already on this device with the backup from{' '}
             <strong>{new Date(pendingRestore.createdAt).toLocaleDateString()}</strong>. You will
-            need the passphrase that belongs to that backup. The current vault is kept aside, but
-            the app only ever opens the restored one.
+            need the passphrase that belongs to that backup. The vault being replaced is kept
+            aside — if this turns out to be the wrong file, this screen can put it back.
           </p>
           <div className="flex flex-wrap gap-2">
             <Button className="!border-brick !bg-brick" onClick={() => void confirmRestore()}>
@@ -156,6 +200,40 @@ export default function LockScreen({
         >
           Restore from a backup file instead
         </button>
+      )}
+
+      {/* Offered for as long as a replaced vault is set aside — until the next
+          restore overwrites it, or a passphrase change deletes it (`0012`). A
+          restore that turns out to be wrong is usually noticed at the moment
+          the phrase does not open it, which is this screen. */}
+      {archived && !pendingRestore && !confirmingUndo && (
+        <button
+          type="button"
+          className="text-sm text-dusk/60 underline underline-offset-2 hover:text-dusk"
+          onClick={() => setConfirmingUndo(true)}
+        >
+          Restored the wrong file? Put the previous vault back
+        </button>
+      )}
+
+      {archived && confirmingUndo && (
+        <Panel className="w-full space-y-3 border-brick/60 bg-brick/10 text-sm">
+          <p>
+            This puts back the vault this device had before the restore, last changed{' '}
+            <strong>{new Date(archived.updatedAt).toLocaleString()}</strong>, and opens with the
+            passphrase <em>that</em> vault used. The backup file you restored from is untouched on
+            your disk, so you can restore it again — but this device keeps only one vault aside, so
+            it will not be offered twice.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button className="!border-brick !bg-brick" onClick={() => void confirmUndo()}>
+              Put the previous vault back
+            </Button>
+            <Button variant="secondary" onClick={() => setConfirmingUndo(false)}>
+              Keep the restored one
+            </Button>
+          </div>
+        </Panel>
       )}
       <input
         ref={fileRef}

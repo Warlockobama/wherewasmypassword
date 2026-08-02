@@ -1,8 +1,6 @@
 # 0016 — The archived vault nobody can reach, and record rollback
 
-**Status:** OPEN — two findings from the security review of `0012`/`0013`/`0014`
-that are outside those three decisions and need a scope call. Neither blocks
-what shipped today.
+**Status:** RESOLVED (user call, 2026-08-02) — see the resolution at the bottom.
 
 ## 1. The "we kept your old vault" promise cannot be acted on
 
@@ -54,3 +52,57 @@ scheme we cannot actually anchor.
 A yes/no on item 1 (plus the retention sub-question if yes), and a pick between
 "document it" and "document it plus show the date" on item 2. Item 1 is an
 afternoon; item 2 as recommended is an hour.
+
+## UPDATE 2026-08-02 (guidance via exec assistant, not yet a ruling)
+
+1. **Undo restore**: James said "let’s go with the recommendation". Add an "undo restore" affordance on the lock screen when an archive exists, restoring the previous vault. Keep the archive only until the next restore or a passphrase change, consistent with current behavior.
+2. **Consequence**: The UI no longer promises an unreachable archive; accidental restore can be reversed with a click.
+
+## RESOLUTION (user call, 2026-08-02 — via exec assistant)
+
+1. **Undo restore**: James said "let’s go with the recommendation". Add an "undo restore" affordance on the lock screen when an archive exists, restoring the previous vault. Keep the archive only until the next restore or a passphrase change, consistent with current behavior.
+2. **Rollback visibility**: James said "yeah, show it" to displaying a last-modified date on the unlocked screen. Document the rollback limitation in the threat model and show the vault last-modified time so a rollback is noticeable.
+3. **Consequence**: Users can recover from accidental restores, and a replaced vault is more likely to be spotted. No attempt is made to implement rollback-proof storage without a trustworthy anchor.
+
+## Implemented (2026-08-02)
+
+**Item 1.** `undoRestore()` in `app/src/storage/db.ts` puts the archived record
+back and drops the archive, both in one transaction so there is no instant when
+neither is the live vault. The lock screen carries it: a quiet line, shown only
+while a vault is set aside — "Restored the wrong file? Put the previous vault
+back" — and one confirmation naming the date that vault was last changed, since
+the thing it replaces is the file the user chose a moment ago and still has.
+
+Retention is exactly as ruled, which is exactly what already happened: the
+archive lives until the next restore overwrites it or a passphrase change
+deletes it. The undo consumes it too — an archive that survived its own undo
+would offer to put back a vault that had already been put back.
+
+The restore dialog's wording changes with it. "The current vault is kept aside,
+but the app only ever opens the restored one" was the honest description of a
+copy nobody could reach; it now says this screen can put it back.
+
+**Item 2.** The unlocked screen shows "Vault last changed <date and time>" under
+the header, with a tooltip saying what an unfamiliar date would mean. The
+limitation itself is now a bullet in the README's security model, stated
+plainly: the header binding stops a record being edited, not replaced whole;
+every defence needs an anchor a browser profile cannot provide; so the date is
+the signal, and no rollback-proof scheme was attempted.
+
+**One thing worth James knowing:** the undo line stays on the lock screen for as
+long as an archive exists, which under the ruled retention can be indefinitely —
+a restore in March is still undoable in June if nothing has replaced the
+archive. That follows from "keep it until the next restore or a passphrase
+change" rather than from a separate decision; if it reads as clutter, an expiry
+is a small change and would need a ruling.
+
+**Also:** a restore and an undo both clear any parked popup session
+(`decisions/0015`). The salt check would refuse that key anyway, but leaving a
+key to a vault that is no longer the live one sitting in memory for five minutes
+is not worth the reasoning.
+
+**Gates:** `npm test` 135 passed — four of them new here, covering the record
+put back, the archive being consumed so the same undo is not offered twice, a
+no-op when nothing was restored, and only the most recent replaced vault
+surviving. `npm run build` clean, `npm run autofill` 37/37, `npm run visual`
+green.

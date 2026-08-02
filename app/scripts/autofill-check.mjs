@@ -464,6 +464,78 @@ async function runSuite({ extDir, browser, port, label, hasGrant }) {
     )
 
     // --------------------------------------------------------------------
+    console.log('\nScenario: where the five-minute popup session parks its key')
+    // The opt-in session (`decisions/0015`) is the only thing this extension
+    // writes a derived key into, and it writes it to `chrome.storage.session`:
+    // browser memory, never disk, and closed to anything running in a page.
+    // Asserted here rather than trusted, because the whole trade the user
+    // agreed to rests on who can read that area.
+    const pageSeesStorage = await loginTab.evaluate(
+      `typeof chrome === 'undefined' || !chrome.storage ? 'unreachable' : 'REACHABLE'`,
+    )
+    check(
+      'a web page cannot see the extension storage API at all',
+      pageSeesStorage === 'unreachable',
+      `page sees chrome.storage as: ${pageSeesStorage}`,
+    )
+
+    // Driven from the worker rather than the popup: both are trusted extension
+    // contexts and the property under test is about the boundary, not about
+    // which side of it does the writing. The worker is also always attached,
+    // where a second `chrome.action.openPopup()` throws.
+    const parked = await swEval(`(async () => {
+      try {
+        await chrome.storage.session.set({ 'wwmp-probe': 'parked' })
+        const back = (await chrome.storage.session.get('wwmp-probe'))['wwmp-probe']
+        return back === undefined ? 'nothing came back' : back
+      } catch (e) { return 'threw: ' + e.message }
+    })()`)
+    check(
+      'a trusted extension context can park a value in session storage',
+      parked === 'parked',
+      `the worker read back: ${parked}`,
+    )
+
+    if (hasGrant) {
+      // A content script is where page-controlled code gets closest to this
+      // extension. `storage.local` *is* readable from one — that is the control
+      // here, and it is not decoration: without it a content script that failed
+      // to inject at all would report "cannot read the key" and pass while
+      // proving nothing. `storage.session` is closed to it by default and by the
+      // worker's explicit access level, so a parked key is out of reach of the
+      // very page being filled. If either half changes, this goes red.
+      await swEval(`chrome.storage.local.set({ 'wwmp-probe': 'control' })`)
+      const seen = await swEval(`(async () => {
+        const [injected] = await chrome.scripting.executeScript({
+          target: { tabId: ${loginTabId} },
+          func: async () => {
+            const read = async (area) => {
+              try {
+                if (!chrome.storage || !chrome.storage[area]) return 'no ' + area + ' area'
+                const got = await chrome.storage[area].get('wwmp-probe')
+                return got && got['wwmp-probe'] ? 'READ:' + got['wwmp-probe'] : 'empty'
+              } catch (e) { return 'refused: ' + e.message }
+            }
+            return { local: await read('local'), session: await read('session') }
+          },
+        })
+        return injected ? injected.result : null
+      })()`)
+      check(
+        'the content script really is running there (it can read local storage)',
+        seen?.local === 'READ:control',
+        `content script saw in storage.local: ${seen?.local ?? 'no injection result'}`,
+      )
+      check(
+        'a content script in the filled page cannot read the parked key',
+        typeof seen?.session === 'string' && !seen.session.startsWith('READ:'),
+        `content script saw in storage.session: ${seen?.session ?? 'no injection result'}`,
+      )
+      await swEval(`chrome.storage.local.remove('wwmp-probe')`)
+    }
+    await swEval(`chrome.storage.session.remove('wwmp-probe')`)
+
+    // --------------------------------------------------------------------
     // Everything past here types into a page, so it needs the grant.
     if (!hasGrant) {
       console.log(

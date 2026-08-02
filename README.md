@@ -40,8 +40,9 @@ you can't hide something in a drawer and open it later. The illustrated house ca
   IndexedDB, on this device only. The plaintext is padded to 4 KiB blocks so the stored
   size does not track what is inside, and the header (salt, KDF parameters, format
   version) is bound into the ciphertext as additional data. Encrypted backup
-  export/import. Spaced practice reminders at 1, 2, 4, 7, 14, 30 days — unlocking *is*
-  the rehearsal.
+  export/import — a restore sets the vault it replaces aside, and the lock screen will
+  put it back if you restored the wrong file. Spaced practice reminders at 1, 2, 4, 7,
+  14, 30 days — unlocking *is* the rehearsal.
 - **Changing the master phrase**: generates a new one, walks you through placing it, and
   re-encrypts the vault under it with your passwords untouched. Vaults created under
   weaker key-derivation settings are re-keyed to the current ones automatically, the
@@ -93,9 +94,22 @@ you can't hide something in a drawer and open it later. The illustrated house ca
   written to disk, gone when the browser closes, and closed to page scripts. The five
   minutes run from the unlock and are not extended by using it; **Lock now** in either
   place ends it early, as does turning the setting off, changing the passphrase, or
-  deleting the vault. What it costs is that until the time is up, anyone at your computer
-  can fill passwords without knowing the phrase — an unattended-machine trade, made
-  deliberately (`decisions/0015`).
+  restoring or deleting the vault. Past the deadline the key is refused, and deleted the
+  next time the extension runs — at the latest when the browser closes and that storage
+  goes with it (`decisions/0017`). What it costs is that until the time is up, anyone at
+  your computer can fill passwords without knowing the phrase — an unattended-machine
+  trade, made deliberately (`decisions/0015`).
+
+- **An old vault record can be put back, and nothing here can prove it wasn't.** The
+  header is bound into the ciphertext, so a record cannot be *edited* — but it can be
+  *replaced whole*. Anyone who can write to the browser profile directory can drop
+  yesterday's vault, or an old backup file, into place, and your correct passphrase
+  opens it without complaint: credential edits since then are gone, and a password you
+  rotated is live again. Every defence against this — a monotonic counter, a signed
+  timestamp — needs somewhere to keep state that the same attacker cannot also roll
+  back, and inside a browser profile there is no such place. So rather than a scheme
+  that cannot be anchored, the unlocked screen shows when the vault was last changed: a
+  date you do not recognise is the signal (`decisions/0016`).
 
 **Known limitation:** Copy remains the fallback for pages autofill cannot reach, and is
 only offered in the full tab. It clears the clipboard 30 seconds after you return to that

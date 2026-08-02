@@ -129,3 +129,44 @@ re-key, malformed records, and clearing). Two of them were checked by reverting
 the behaviour they describe and confirming they go red. `npm run build` clean.
 `npm run autofill` 31/31 — one more check than before. The manual toolbar-click
 pass in the README has not been run; it needs a person.
+
+## Adversarial review, same day
+
+The commit was reviewed against `0008`'s threat model. The opt-in itself held —
+nothing can park a key without it, the memory house's key is never parked, and a
+resume cannot extend the deadline — but four real defects were found in the
+*edges* of the lifetime, and all four are fixed:
+
+1. **An expired key was refused but never deleted.** Nothing runs at the
+   deadline: the popup is long destroyed and an MV3 worker is killed after
+   thirty idle seconds. The bytes could sit in browser memory for the rest of
+   the day. The worker now sweeps at every start, and the popup sweeps on the
+   no-vault path too. What is left of the gap — never touching the extension
+   again while leaving the browser open — is written up in `decisions/0017`,
+   which asks whether it is worth the `alarms` permission to close properly. The
+   README no longer implies it is already closed.
+2. **A deadline had no upper bound.** A clock stepped backwards (an NTP
+   correction after a suspend, a dual-boot RTC disagreement) would have left a
+   session running for the length of the step, with the popup counting down from
+   sixty-five minutes. Both the write and the read now refuse anything further
+   off than one whole session.
+3. **A Lock landing mid-park could be undone by the write that followed it** —
+   the next popup would open unlocked after the user explicitly locked. A
+   generation counter, bumped by every clear and checked either side of the
+   write, closes it. The key is also encoded before the first `await` now, so a
+   popup torn down mid-call cannot park thirty-two zero bytes.
+4. **Restore and undo-restore left the key parked.** Fixed as part of `0016`.
+
+Two smaller things came with them: the mount effect now drops a key resumed
+after teardown rather than orphaning it, and the two copies of the switch — popup
+and memory house — stay in step through a storage listener instead of showing
+opposite answers.
+
+**Gates after the fixes:** `npm test` 135 passed (three more, one per defect
+that a test can express). `npm run build` clean. `npm run autofill` 37/37 — the
+harness gained a scenario proving in a real browser that a trusted extension
+context can reach `chrome.storage.session` while a web page and an injected
+content script cannot. It carries its own control: the same content script is
+shown reading `chrome.storage.local`, so "cannot read the key" cannot pass by
+failing to inject. The browser's own refusal is the evidence — *"Access to
+storage is not allowed from this context."*

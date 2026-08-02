@@ -188,6 +188,43 @@ describe('popup session', () => {
     expect((await resumePopupSession(vault()))?.rawKey).toEqual(OTHER_KEY)
   })
 
+  it('refuses a deadline further off than a whole session', async () => {
+    // What a clock stepped backwards leaves behind — an NTP correction after a
+    // suspend, or a dual-boot machine disagreeing about the RTC. Without an
+    // upper bound the session runs for the length of the step and the popup
+    // counts down from sixty-five minutes.
+    await setPopupSessionEnabled(true)
+    session.set('popup-session', {
+      key: 'B'.repeat(42) + '==',
+      salt: 'salt-one',
+      expiresAt: Date.now() + 65 * 60 * 1000,
+    })
+
+    expect(await resumePopupSession(vault())).toBeNull()
+    expect(session.has('popup-session')).toBe(false)
+  })
+
+  it('will not park a deadline further off than a whole session either', async () => {
+    await setPopupSessionEnabled(true)
+
+    await startPopupSession(KEY, 'salt-one', Date.now() + 65 * 60 * 1000)
+
+    expect([...session.keys()]).toEqual([])
+  })
+
+  it('does not park a key over a lock that landed while it was starting', async () => {
+    // The user presses Lock in the moment between the preference being read
+    // and the key being written. Without the guard the write wins, and the
+    // next popup opens unlocked after an explicit lock.
+    await setPopupSessionEnabled(true)
+    const parking = startPopupSession(KEY, 'salt-one', Date.now() + POPUP_SESSION_MS)
+    await clearPopupSession()
+    await parking
+
+    expect(session.has('popup-session')).toBe(false)
+    expect(await resumePopupSession(vault())).toBeNull()
+  })
+
   it('does nothing at all outside the extension', async () => {
     // The same bundle is served as a plain web page, where `chrome` is absent.
     vi.stubGlobal('chrome', undefined)
