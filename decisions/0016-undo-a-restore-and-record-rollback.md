@@ -121,7 +121,8 @@ long as an archive exists, which under the ruled retention can be indefinitely â
 a restore in March is still undoable in June if nothing has replaced the
 archive. That follows from "keep it until the next restore or a passphrase
 change" rather than from a separate decision; if it reads as clutter, an expiry
-is a small change and would need a ruling.
+is a small change and would need a ruling. That question, together with the fact
+that the offer necessarily sits before the passphrase, is written up as `0018`.
 
 **Also:** a restore and an undo both clear any parked popup session
 (`decisions/0015`). The salt check would refuse that key anyway, but leaving a
