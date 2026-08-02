@@ -49,7 +49,9 @@ you can't hide something in a drawer and open it later. The illustrated house ca
 - **The toolbar popup**: on a login page, click the toolbar button. A compact panel
   unlocks, puts the entry saved for *that* site at the top of the list, and types it
   straight into the form — no clipboard. The memory house stays a full tab, which is
-  where training, palace walks, and adding or editing entries live.
+  where training, palace walks, and adding or editing entries live. It asks for the
+  passphrase every time unless you tick **Stay unlocked for 5 minutes**, which is off
+  until you turn it on.
 
 ### Security model
 
@@ -60,12 +62,15 @@ you can't hide something in a drawer and open it later. The illustrated house ca
 - No server, no analytics, zero network requests; production builds ship a strict CSP
   (`default-src 'self'`; WASM allowed for Argon2id only).
 - Auto-lock after 5 minutes idle, 60 seconds after the tab is hidden, and a 30-minute
-  ceiling no activity can extend. Deadlines are wall-clock, so a suspended laptop wakes
-  locked. Locking one tab locks every open copy.
+  ceiling no activity can extend. The popup drops its key 5 minutes after the unlock that
+  made it, whether or not the session below is on. Deadlines are wall-clock, so a
+  suspended laptop wakes locked. Locking one tab locks every open copy.
 - If you forget the phrase, nothing can recover the vault. That's the deal — and the
   whole point of the training.
-- **Autofill without host permissions.** The extension asks for `activeTab` and
-  `scripting` and nothing else — no "read and change all your data on every website".
+- **Autofill without host permissions.** The extension asks for `activeTab`,
+  `scripting` and `storage`, and nothing else — no "read and change all your data on
+  every website". (`storage` reaches nothing outside this extension and adds no warning
+  at install; it is there for the opt-in popup session below.)
   `activeTab` is granted for the tab that was active when the toolbar button was
   clicked, which is why filling happens from the popup: a popup is not a tab, so the
   login page underneath stays active and stays granted. (The UI used to open in a full
@@ -81,10 +86,16 @@ you can't hide something in a drawer and open it later. The illustrated house ca
   while the passphrase was being typed is refused before the password is handed to its
   renderer at all. Fields the user cannot see — tiny, transparent, off-screen, disabled,
   covered — are refused, so a harvesting page gets nothing.
-- **The popup holds the key for as long as it is open, and no longer.** The browser
-  destroys a popup the moment it loses focus, so the key dies with it; the popup asks for
-  the passphrase each time rather than sharing a session with the full tab
-  (`decisions/0015`).
+- **The popup asks every time, unless you say otherwise.** By default the key it derives
+  dies with the popup — the browser destroys a popup the moment it loses focus — and it
+  never shares a session with the full tab. **Stay unlocked for 5 minutes**, off until
+  you turn it on, keeps that key in `chrome.storage.session`: browser memory, never
+  written to disk, gone when the browser closes, and closed to page scripts. The five
+  minutes run from the unlock and are not extended by using it; **Lock now** in either
+  place ends it early, as does turning the setting off, changing the passphrase, or
+  deleting the vault. What it costs is that until the time is up, anyone at your computer
+  can fill passwords without knowing the phrase — an unattended-machine trade, made
+  deliberately (`decisions/0015`).
 
 **Known limitation:** Copy remains the fallback for pages autofill cannot reach, and is
 only offered in the full tab. It clears the clipboard 30 seconds after you return to that

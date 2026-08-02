@@ -12,3 +12,6 @@
 - 2026-07-31 RESOLVED 0012-change-master-passphrase.md — 1. **Implement master passphrase change and KDF upgrade together**: James said "go with the recommendation." Implement a
 - 2026-07-31 RESOLVED 0013-kdf-parameter-upgrade-on-unlock.md — 1. **Upgrade KDF parameters on unlock**: James said "yeah, that's fine" to the recommendation. Raise the default memory 
 - 2026-07-31 RESOLVED 0014-pad-ciphertext-and-bind-header.md — 1. **Go for padding and header binding**: James chose the recommendation. Pad the vault plaintext to the next 4 KiB with
+- 2026-08-02 RESOLVED 0015-popup-session-sharing-and-copy.md — 1. **Popup session behavior**: James said "I agree" to the suggested default. Add an opt-in "stay unlocked for 5 minutes
+- 2026-08-02 UPDATE 0016-undo-a-restore-and-record-rollback.md — 1. **Undo restore**: James said "let’s go with the recommendation". Add an "undo restore" affordance on the lock screen 
+- 2026-08-02 RESOLVED 0016-undo-a-restore-and-record-rollback.md — 1. **Undo restore**: James said "let’s go with the recommendation". Add an "undo restore" affordance on the lock screen 

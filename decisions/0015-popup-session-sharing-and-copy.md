@@ -1,7 +1,6 @@
 # 0015 — What the toolbar popup is allowed to do: session sharing, and Copy
 
-**Status:** OPEN — two small follow-ons from shipping the popup (`0011`). Neither
-blocks it; both are shipped one way today and can be changed on a word.
+**Status:** RESOLVED (user call, 2026-08-02) — see the resolution at the bottom.
 
 The popup from `0011` is built and filling. Building it surfaced two questions
 that are genuinely James's call rather than defaults, because both trade a
@@ -69,3 +68,64 @@ click away with a working, self-clearing Copy.
 Each answer is a small, self-contained change: item 1 is a day, item 2 is an
 hour plus a permission we would rather not add. Neither changes the vault
 format. The autofill test covers the fill path either way.
+
+## RESOLUTION (user call, 2026-08-02 — via exec assistant)
+
+1. **Popup session behavior**: James said "I agree" to the suggested default. Add an opt-in "stay unlocked for 5 minutes" mode, OFF by default, with explicit auto-lock and lock-clearing behavior.
+2. **Popup Copy**: James said "I agree" to the suggested default. Keep the popup Fill-only and do not add Copy to the popup; users can switch to the full tab for Copy when needed.
+
+## Implemented (2026-08-02)
+
+**Item 2 needed no code.** The popup is still Fill-only; nothing was added.
+
+**Item 1** is `app/src/popup/session.ts`, which holds the whole bargain — the
+opt-in, the deadline, and the clearing — so that no UI path can widen it by
+forgetting a check. The switch is in two places: the popup (met at the moment of
+typing the phrase for the fourth time) and the memory house's new "The toolbar
+popup" panel (where there is room to say what it costs). Off until ticked.
+
+The key is parked as base64 in `chrome.storage.session` — browser memory, never
+written to disk, wiped when the browser closes, and closed to content scripts.
+`chrome.storage.session` takes only JSON, so a non-extractable `CryptoKey`
+cannot be stored instead; that is a real loss against `0008`'s "the
+non-extractable CryptoKey is the part that matters", though a smaller one than
+it sounds, since a handle that decrypts the vault yields the master phrase
+inside it just as the raw bytes do.
+
+Four things that were judgement calls inside the ruling, worth James knowing:
+
+1. **The popup's session is the popup's own.** Unlocking the memory house does
+   not park anything, so opening the popup beside an unlocked tab still asks for
+   the phrase. A tab session runs up to thirty minutes and lending it out would
+   have quietly turned "five minutes" into that.
+2. **The five-minute cap now applies to the popup even with the setting off** —
+   the explicit auto-lock item 1 asked for. This closes the flip side named
+   above: a popup with devtools attached keeps focus and used to hold its key
+   for as long as it stayed open.
+3. **Idle auto-locks elsewhere do not end the session; explicit ones do.** "Lock
+   now" in either place clears it, as do a passphrase change and a deleted
+   vault. A memory-house tab locking itself on its 60-second hidden timer does
+   not — otherwise switching from the memory house to a login page would kill
+   the session about a minute later, which is exactly the case the feature is
+   for. Cost: a popup left on screen through another tab's auto-lock shows the
+   passphrase prompt although a valid session is still parked; reopening it
+   picks the session back up.
+4. **A resumed session records no practice unlock and performs no KDF upgrade.**
+   Nobody recalled anything, so counting it would inflate the schedule into
+   silence (the argument in §1 above); the upgrade needs the passphrase, and
+   happens on the next real unlock instead.
+
+**One permission was added: `storage`.** There is no other way to reach
+`chrome.storage.session`. It grants access to nothing outside this extension and
+shows no new warning at install, but the README's "asks for `activeTab` and
+`scripting` and nothing else" was an absolute claim and has been corrected. The
+autofill check that asserts the exact permission set caught this, as designed;
+it now asserts the new set, plus that the shipped worker still pins session
+storage to trusted contexts.
+
+**Gates:** `npm test` 128 passed (12 new, covering the opt-in invariant, the
+wall-clock deadline, a resume that cannot extend it, salt mismatch after a
+re-key, malformed records, and clearing). Two of them were checked by reverting
+the behaviour they describe and confirming they go red. `npm run build` clean.
+`npm run autofill` 31/31 — one more check than before. The manual toolbar-click
+pass in the README has not been run; it needs a person.

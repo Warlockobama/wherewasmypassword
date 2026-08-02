@@ -10,6 +10,22 @@
 // via the `wwmp-open-app` message below.
 const UI_URL = chrome.runtime.getURL('index.html')
 
+// The opt-in five-minute popup session parks a derived key in
+// `chrome.storage.session` — in memory, never on disk (`decisions/0015`). That
+// area is already closed to content scripts by default; this says so out loud,
+// on every worker start, so the day someone opens it up for something else it
+// has to be a deliberate edit to this line rather than a default quietly
+// changing underneath a key.
+try {
+  chrome.storage.session
+    .setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' })
+    .catch(() => {
+      /* older Chromium: the default is already trusted-contexts-only */
+    })
+} catch {
+  /* the API is absent entirely; same default applies */
+}
+
 /**
  * Open the full palace tab — or focus the one already open. Each tab is a
  * separate unlocked session with its own key and its own timers, so clicking

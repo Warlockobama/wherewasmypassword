@@ -22,7 +22,8 @@
   },
   "permissions": [
     "activeTab",
-    "scripting"
+    "scripting",
+    "storage"
   ],
   "externally_connectable": { "ids": [] },
   "content_security_policy": {

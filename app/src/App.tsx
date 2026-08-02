@@ -21,6 +21,7 @@ import {
 } from './storage/db.ts'
 import { daysUntilPractice, isPracticeDue } from './srs/schedule.ts'
 import { recordPracticeUnlock } from './srs/practice.ts'
+import { clearPopupSession } from './popup/session.ts'
 
 type Phase =
   | 'loading'
@@ -102,6 +103,23 @@ export default function App() {
     // its own timers. Locking one has to mean locking all of them.
     if (broadcast) lockChannel?.postMessage('lock')
     setPhase('locked')
+  }
+
+  /**
+   * "Lock now", pressed by a person — which means everything, including the
+   * toolbar popup's opt-in five-minute session (`decisions/0015`). That session
+   * survives with no page open at all, so a broadcast cannot reach it; only
+   * this can.
+   *
+   * The idle timers above deliberately do not do this. They are each context
+   * minding its own key, and the popup's session is already capped at five
+   * minutes from the unlock that made it — letting a hidden memory-house tab
+   * cut that short a minute after the user switched to a login page would
+   * remove the feature in exactly the case it exists for.
+   */
+  const lockNow = () => {
+    void clearPopupSession()
+    lock()
   }
 
   // Every phase that holds a derived key in memory. Changing the passphrase is
@@ -333,12 +351,14 @@ export default function App() {
           resealed={resealed}
           // Wrapped, not passed directly: React hands the click event to the
           // first parameter, which is `broadcast`.
-          onLock={() => lock()}
+          onLock={() => lockNow()}
           onChangePassphrase={() => setPhase('change-passphrase')}
           onDeleted={() => {
             // Same key hygiene as lock(): dropping the reference is not enough.
             unlocked.rawKey.fill(0)
             void clearClipboardOnLock()
+            // There is no vault left for a parked popup key to open.
+            void clearPopupSession()
             setUnlocked(null)
             setStored(null)
             setMeta(null)
@@ -365,6 +385,11 @@ export default function App() {
             // locked. A BroadcastChannel does not deliver to its own sender, so
             // this tab stays open.
             lockChannel?.postMessage('lock')
+            // The popup's parked key is one of those retired keys, and it is
+            // not reachable by broadcast. Its salt no longer matches either, so
+            // this is belt and braces — but the belt is what stops a stale key
+            // sitting in memory for five minutes after a phrase was burned.
+            void clearPopupSession()
             setUnlocked({ rawKey: nextKey, data: nextData })
             setStored(nextStored)
             setMeta(freshPracticeMeta(Date.now()))

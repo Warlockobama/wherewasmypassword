@@ -160,8 +160,9 @@ async function scratchBuildWithHostPermission() {
 
 /**
  * What the shipped build promises about itself, checked against the files
- * rather than the running browser: the toolbar button must open the popup, and
- * it must still be buying that with `activeTab` alone.
+ * rather than the running browser: the toolbar button must open the popup, it
+ * must still be buying that without host permissions, and the one storage area
+ * a derived key ever reaches must stay closed to page scripts.
  */
 async function checkShippedBuild() {
   const results = []
@@ -182,10 +183,26 @@ async function checkShippedBuild() {
     !manifest.host_permissions?.length && !manifest.optional_host_permissions?.length,
     `host_permissions=${JSON.stringify(manifest.host_permissions ?? null)}`,
   )
+  // Deliberately an exact set rather than a subset: the point is that adding a
+  // permission has to be a decision someone takes here, in the open, and not a
+  // line that slips in with a feature. `storage` is the one the five-minute
+  // popup session bought (`decisions/0015`); it grants no access to anything
+  // outside this extension and shows the user no new warning at install.
   check(
-    'the permission set is still just activeTab + scripting',
-    JSON.stringify([...(manifest.permissions ?? [])].sort()) === JSON.stringify(['activeTab', 'scripting']),
+    'the permission set is still just activeTab + scripting + storage',
+    JSON.stringify([...(manifest.permissions ?? [])].sort()) ===
+      JSON.stringify(['activeTab', 'scripting', 'storage']),
     `permissions=${JSON.stringify(manifest.permissions)}`,
+  )
+  // The parked key lives in `chrome.storage.session`. Content scripts cannot
+  // read that area by default, and the worker says so explicitly so that the
+  // default changing — or someone opening the area up for something unrelated
+  // — cannot quietly expose a key. If that line goes, this check goes red.
+  const worker = await readFile(join(DIST, 'background.js'), 'utf8')
+  check(
+    'the worker pins session storage to trusted contexts',
+    /setAccessLevel\(\s*\{\s*accessLevel:\s*'TRUSTED_CONTEXTS'\s*\}\s*\)/.test(worker),
+    `setAccessLevel present=${worker.includes('setAccessLevel')}`,
   )
   return results
 }

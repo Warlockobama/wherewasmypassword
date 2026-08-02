@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Palace from '../palace/Palace.tsx'
 import type { VaultData } from '../crypto/vault.ts'
 import { ClueCard, EmptySlot } from '../palace/rooms/shared.tsx'
@@ -15,6 +15,7 @@ import {
   editCredential,
   deleteCredential,
 } from '../credentials/vault-credentials.ts'
+import { popupSessionEnabled, setPopupSessionEnabled } from '../popup/session.ts'
 
 export default function UnlockedHome({
   data,
@@ -234,6 +235,8 @@ export default function UnlockedHome({
         </p>
       )}
 
+      <PopupSessionSetting />
+
       <Panel className="w-full space-y-3">
         <h2 className="font-display text-lg text-dusk">Housekeeping</h2>
         <div className="flex flex-wrap gap-3">
@@ -279,5 +282,64 @@ export default function UnlockedHome({
         )}
       </Panel>
     </Screen>
+  )
+}
+
+/**
+ * The toolbar popup's opt-in five-minute session, set out where there is room
+ * to be honest about it (`decisions/0015`). The same switch is in the popup,
+ * where it is met at the moment of typing the phrase for the fourth time; this
+ * is where someone reviewing what their password manager does will look for it.
+ *
+ * The switch only ever governs the *popup's* own unlocks. This tab's key is
+ * never parked anywhere: a memory-house session runs up to thirty minutes, and
+ * lending it out would quietly turn "five minutes" into that.
+ */
+function PopupSessionSetting() {
+  const [enabled, setEnabled] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    void popupSessionEnabled()
+      .then(setEnabled)
+      .catch(() => setEnabled(false))
+  }, [])
+
+  // Nothing to offer when there is no popup — the same bundle is also served as
+  // a plain web page — and nothing to show until the setting has been read.
+  if (!isExtensionContext() || enabled === null) return null
+
+  const toggle = (on: boolean) => {
+    // The switch follows the write rather than leading it, so a refused write
+    // leaves the user looking at what is actually true.
+    void setPopupSessionEnabled(on)
+      .then(() => setEnabled(on))
+      .catch(() => {})
+  }
+
+  return (
+    <Panel className="w-full space-y-3">
+      <h2 className="font-display text-lg text-dusk">The toolbar popup</h2>
+      <p className="text-sm text-dusk/80">
+        Normally the popup asks for your passphrase every time you open it, and the key it makes
+        is gone a moment later — the browser destroys the popup as soon as you click away. Four
+        logins in a morning means saying the phrase four times.
+      </p>
+      <label className="flex cursor-pointer items-start gap-2 text-sm text-dusk">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => toggle(e.target.checked)}
+          className="mt-0.5 size-4 accent-amber-glow"
+        />
+        <span className="font-semibold">Let the popup stay unlocked for 5 minutes</span>
+      </label>
+      <p className="text-sm text-dusk/80">
+        With this on, the popup keeps the key for five minutes after you unlock it — held in
+        browser memory, never written to disk, and gone when the browser closes. The five minutes
+        run from the unlock and are not extended by using it. The cost is real: until the time is
+        up, anyone at this computer can fill your passwords without knowing the phrase. Turning
+        this off ends any session already running, and so does <strong>Lock now</strong>.
+      </p>
+    </Panel>
   )
 }
