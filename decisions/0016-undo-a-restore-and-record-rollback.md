@@ -67,16 +67,26 @@ afternoon; item 2 as recommended is an hour.
 ## Implemented (2026-08-02)
 
 **Item 1.** `undoRestore()` in `app/src/storage/db.ts` puts the archived record
-back and drops the archive, both in one transaction so there is no instant when
-neither is the live vault. The lock screen carries it: a quiet line, shown only
-while a vault is set aside — "Restored the wrong file? Put the previous vault
-back" — and one confirmation naming the date that vault was last changed, since
-the thing it replaces is the file the user chose a moment ago and still has.
+back, in one transaction so there is no instant when either record is missing.
+The lock screen carries it: a quiet line, shown only while a vault is set aside
+— "Restored the wrong file? Put the previous vault back" — and one confirmation
+naming the dates both vaults were last changed, so it is clear which way round
+the swap goes.
 
-Retention is exactly as ruled, which is exactly what already happened: the
-archive lives until the next restore overwrites it or a passphrase change
-deletes it. The undo consumes it too — an archive that survived its own undo
-would offer to put back a vault that had already been put back.
+**It is a swap, not a consume, and that is a change of mind worth naming.** The
+first cut dropped the archive after using it, on the reasoning that the file
+just restored is still on the user's disk. But the offer outlives the restore
+that produced it: under the retention ruled here the archive survives until the
+next restore or a passphrase change, so the line is still on the lock screen
+months later — by which time the live vault holds credential edits that exist in
+no backup file anywhere. Consuming the archive would let one curious press
+destroy them: the same unrecoverable loss this decision exists to remove,
+pointed the other way. Swapping means the worst a mistaken press can do is put
+the wrong vault on screen, and pressing again puts it back.
+
+Retention is otherwise exactly as ruled, which is exactly what already
+happened: one slot, overwritten by the next restore, deleted by a passphrase
+change.
 
 The restore dialog's wording changes with it. "The current vault is kept aside,
 but the app only ever opens the restored one" was the honest description of a
@@ -88,6 +98,23 @@ limitation itself is now a bullet in the README's security model, stated
 plainly: the header binding stops a record being edited, not replaced whole;
 every defence needs an anchor a browser profile cannot provide; so the date is
 the signal, and no rollback-proof scheme was attempted.
+
+Showing the stamp meant it had to start telling the truth. The automatic KDF
+upgrade (`0013`) rewrites the record without touching a single credential, and
+it was refreshing `updatedAt` when it did — so an old record, which is exactly
+the kind that gets upgraded, would come out of its first unlock stamped with
+today's date. That is today's date printed on precisely the planted vault the
+signal exists to catch. `sealVault` now takes the stamp as an argument and the
+upgrade carries the existing one through.
+
+Two smaller corrections came with it. A restore or an undo replaces the live
+record just as a passphrase change does, so it now locks every other open copy
+of the UI — one left open would be showing credentials that are no longer on
+disk, and its next save would fail. And the passphrase change's two pieces of
+housekeeping — resetting the practice ladder, deleting the archive — were
+sharing one `try`, so a failed practice write skipped the archive deletion; the
+archive is not retried by anything, so that vault stayed on disk under the
+phrase the user had just burned.
 
 **One thing worth James knowing:** the undo line stays on the lock screen for as
 long as an archive exists, which under the ruled retention can be indefinitely —
@@ -101,8 +128,10 @@ is a small change and would need a ruling.
 key to a vault that is no longer the live one sitting in memory for five minutes
 is not worth the reasoning.
 
-**Gates:** `npm test` 135 passed — four of them new here, covering the record
-put back, the archive being consumed so the same undo is not offered twice, a
-no-op when nothing was restored, and only the most recent replaced vault
-surviving. `npm run build` clean, `npm run autofill` 37/37, `npm run visual`
-green.
+**Gates:** `npm test` 138 passed — seven of them new here, covering the record
+put back, the displaced record taking the archive slot so a second press undoes
+the undo, the archive never being left pointing at the vault that is now live, a
+no-op when nothing was restored, only the most recent replaced vault surviving,
+a deleted vault leaving nothing set aside, and the KDF upgrade not restamping a
+vault whose contents it did not touch. `npm run build` clean,
+`npm run autofill` 37/37, `npm run visual` green.

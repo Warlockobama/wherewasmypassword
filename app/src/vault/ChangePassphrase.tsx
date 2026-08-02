@@ -112,19 +112,26 @@ export default function ChangePassphrase({
       rawKey.fill(0)
       setResult({ rawKey: nextKey, data: nextData, stored: nextStored })
       setStep('done')
+      // Two independent steps, each with its own catch. Sharing one would let a
+      // failed practice write skip the archive deletion below, and nothing ever
+      // retries a deletion — the stale archive would simply sit there.
+      try {
+        // The archived copy is still encrypted under the phrase just retired.
+        // Leaving it would hand anyone with this profile directory exactly the
+        // vault the user was trying to move away from — and, since
+        // `decisions/0016`, the lock screen would offer to put it back.
+        await deleteArchivedVault()
+      } catch {
+        // Not worth telling the user their passphrase change failed when it did
+        // not; the change itself landed several lines above.
+      }
       try {
         // A new phrase means a new memory to build, so the spaced-practice
         // ladder starts at the bottom rung rather than carrying over a mastery
         // that was earned for different words.
         await savePracticeMeta(freshPracticeMeta(Date.now()))
-        // The archived copy is still encrypted under the phrase just retired.
-        // Leaving it would hand anyone with this profile directory exactly the
-        // vault the user was trying to move away from.
-        await deleteArchivedVault()
       } catch {
-        // Both are recoverable on their own terms: a stale practice date is
-        // cosmetic, and the archive is retried by the next restore. Neither is
-        // worth telling the user their passphrase change failed when it did not.
+        // A stale practice date is cosmetic.
       }
     } catch (err) {
       setDetail(err instanceof Error ? err.message : String(err))

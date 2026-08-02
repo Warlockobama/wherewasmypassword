@@ -162,8 +162,9 @@ after teardown rather than orphaning it, and the two copies of the switch — po
 and memory house — stay in step through a storage listener instead of showing
 opposite answers.
 
-**Gates after the fixes:** `npm test` 135 passed (three more, one per defect
-that a test can express). `npm run build` clean. `npm run autofill` 37/37 — the
+**Gates after the fixes:** `npm test` green, three tests more — one per defect
+a test can express (137 in the suite, counting `0016`'s, which landed with
+them). `npm run build` clean. `npm run autofill` 37/37 — the
 harness gained a scenario proving in a real browser that a trusted extension
 context can reach `chrome.storage.session` while a web page and an injected
 content script cannot. It carries its own control: the same content script is

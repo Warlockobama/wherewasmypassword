@@ -19,7 +19,19 @@ import { saveVault, type StoredVault } from '../storage/db.ts'
 export async function sealVault(
   rawKey: Uint8Array,
   data: VaultData,
-  header: { salt: string; kdfParams: StoredVault['kdfParams']; createdAt: number },
+  header: {
+    salt: string
+    kdfParams: StoredVault['kdfParams']
+    createdAt: number
+    /**
+     * When the vault's *contents* last changed, if this write is not itself a
+     * change to them. Housekeeping — the KDF upgrade an unlock performs — passes
+     * the existing value so the stamp keeps meaning what the unlocked screen
+     * says it means (`decisions/0016`). Defaults to now, which is right for
+     * every write the user actually made.
+     */
+    updatedAt?: number
+  },
   /**
    * The record this update was built from. Supplied by writes that mean to keep
    * the existing key, so that a stale context cannot overwrite a vault whose
@@ -39,7 +51,7 @@ export async function sealVault(
     iv: toBase64(blob.iv),
     ciphertext: toBase64(blob.ciphertext),
     createdAt: header.createdAt,
-    updatedAt: Date.now(),
+    updatedAt: header.updatedAt ?? Date.now(),
   }
   await saveVault(next, expecting)
   return next
@@ -59,6 +71,8 @@ export async function rekeyVault(
   passphrase: string,
   data: VaultData,
   createdAt: number,
+  /** See `sealVault`. Passed only by the automatic KDF upgrade. */
+  updatedAt?: number,
 ): Promise<{ rawKey: Uint8Array; stored: StoredVault }> {
   const salt = randomBytes(16)
   const rawKey = await deriveKey(passphrase, salt, DEFAULT_KDF_PARAMS)
@@ -66,6 +80,7 @@ export async function rekeyVault(
     salt: toBase64(salt),
     kdfParams: DEFAULT_KDF_PARAMS,
     createdAt,
+    updatedAt,
   })
   return { rawKey, stored }
 }
@@ -107,7 +122,13 @@ export async function upgradeOnUnlock(
   if (kind === 'none') return { rawKey, stored, upgraded: 'none' }
   try {
     if (kind === 'rekey') {
-      const rekeyed = await rekeyVault(passphrase, data, stored.createdAt)
+      // `stored.updatedAt` is carried, not refreshed: re-deriving the key
+      // rewrites the record without changing a single credential, and the
+      // unlocked screen shows this stamp as the vault's last change so a
+      // rollback can be spotted. Since an old record is exactly the kind that
+      // needs upgrading, stamping it now would print today's date on precisely
+      // the planted vault that signal exists to catch (`decisions/0016`).
+      const rekeyed = await rekeyVault(passphrase, data, stored.createdAt, stored.updatedAt)
       // The old key is dead the moment the new record lands; do not leave its
       // bytes lying in this heap waiting for a collector.
       rawKey.fill(0)
@@ -119,6 +140,9 @@ export async function upgradeOnUnlock(
         salt: stored.salt,
         kdfParams: stored.kdfParams,
         createdAt: stored.createdAt,
+        // Same reasoning as the rekey branch: a format rewrite changes the
+        // record, not what is in the vault.
+        updatedAt: stored.updatedAt,
       }),
       upgraded: 'format',
     }

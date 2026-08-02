@@ -182,6 +182,20 @@ describe('bringing a vault forward at unlock', () => {
     expect(await readBack(brought.stored, rederived)).toEqual(data)
   }, 60_000)
 
+  it('does not restamp the vault: a re-key changes no contents', async () => {
+    // The unlocked screen shows `updatedAt` as the vault's last change, so a
+    // record the user does not recognise is the one signal that an old vault
+    // was planted in place of theirs (`decisions/0016`). An old record is
+    // exactly the kind this upgrade rewrites — stamping it now would print
+    // today's date on precisely the vault that signal exists to catch.
+    const { stored, rawKey } = await buildOldVault()
+
+    const brought = await upgradeOnUnlock(PHRASE, rawKey, data, stored)
+
+    expect(brought.upgraded).toBe('rekey')
+    expect(brought.stored.updatedAt).toBe(stored.updatedAt)
+  }, 60_000)
+
   it('wipes the superseded key rather than leaving it in the heap', async () => {
     const { stored, rawKey } = await buildOldVault()
     const brought = await upgradeOnUnlock(PHRASE, rawKey, data, stored)

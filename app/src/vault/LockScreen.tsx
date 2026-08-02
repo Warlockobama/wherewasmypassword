@@ -112,16 +112,23 @@ export default function LockScreen({
   /**
    * Put back the vault this device had before the restore.
    *
-   * Deliberately not offered as "are you sure" on a hair trigger: it replaces
-   * the vault that is live now, which is the file the user chose. That file is
-   * still on their disk, which is why one confirmation is enough.
+   * One confirmation rather than a hair trigger, but the operation underneath
+   * is a swap, not a replacement: whatever is live now goes into the slot the
+   * archive just left, so pressing this by mistake costs a second press rather
+   * than a vault. See `undoRestore`.
    */
   const confirmUndo = async () => {
     try {
       const back = await undoRestore()
-      setArchived(null)
       setConfirmingUndo(false)
-      if (!back) return
+      if (!back) {
+        // Nothing was set aside after all — another context consumed it.
+        setArchived(null)
+        return
+      }
+      // The swap moved the vault that was live into the archive slot, so the
+      // offer stays on screen, now pointing the other way.
+      setArchived(stored)
       await clearPopupSession()
       onRestored(back)
     } catch (err) {
@@ -219,11 +226,12 @@ export default function LockScreen({
       {archived && confirmingUndo && (
         <Panel className="w-full space-y-3 border-brick/60 bg-brick/10 text-sm">
           <p>
-            This puts back the vault this device had before the restore, last changed{' '}
-            <strong>{new Date(archived.updatedAt).toLocaleString()}</strong>, and opens with the
-            passphrase <em>that</em> vault used. The backup file you restored from is untouched on
-            your disk, so you can restore it again — but this device keeps only one vault aside, so
-            it will not be offered twice.
+            This device keeps one vault aside, and this swaps it with the one in use. The vault
+            set aside — last changed{' '}
+            <strong>{new Date(archived.updatedAt).toLocaleString()}</strong> — becomes the vault
+            this device opens, and it wants the passphrase <em>that</em> vault used. The one open
+            now, last changed <strong>{new Date(stored.updatedAt).toLocaleString()}</strong>, takes
+            its place aside. Nothing is thrown away: if this is the wrong way round, swap back.
           </p>
           <div className="flex flex-wrap gap-2">
             <Button className="!border-brick !bg-brick" onClick={() => void confirmUndo()}>

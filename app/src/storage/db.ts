@@ -117,22 +117,26 @@ export async function loadArchivedVault(): Promise<StoredVault | undefined> {
 }
 
 /**
- * Put the archived vault back and drop the archive, returning the record that
- * is now live — or undefined if there was nothing to undo.
+ * Swap the vault set aside with the live one: the archived record becomes the
+ * vault this device opens, and the record it displaces takes the archive slot.
+ * Returns the record that is now live, or undefined if nothing was set aside.
  *
  * This is what makes the archive worth writing. Until `decisions/0016` nothing
  * ever read it back, so the restore dialog's promise that "the current vault is
  * kept aside" was true on disk and unreachable from the UI: one wrong file and
  * a vault with no other copy was gone.
  *
- * Both halves happen in one transaction, so there is no instant where the
- * archive has been consumed and the live record has not been written — a
- * crash in the middle of *that* would lose both.
+ * A swap rather than a one-way move, because the offer outlives the restore
+ * that produced it. The archive survives until the next restore or a passphrase
+ * change, so the button is still on the lock screen months later — by which
+ * time the live vault holds credential edits that exist in no backup file.
+ * Consuming the archive would make one curious press destroy them, which is the
+ * same unrecoverable loss this decision exists to remove, pointed the other
+ * way. Swapping means the worst a mistaken press can do is put the wrong vault
+ * on screen, and pressing again puts it back.
  *
- * The archive is dropped rather than kept for a second undo: what it replaces
- * is the backup file the user chose a moment ago, which they still have, and an
- * archive that survived its own undo would offer to put back a vault that had
- * already been put back.
+ * Both halves happen in one transaction, so there is no instant where either
+ * record is missing — a crash in the middle of *that* would lose one of them.
  */
 export async function undoRestore(): Promise<StoredVault | undefined> {
   const database = await db()
@@ -142,8 +146,13 @@ export async function undoRestore(): Promise<StoredVault | undefined> {
     await tx.done
     return undefined
   }
+  const live = await tx.store.get(VAULT_KEY)
   await tx.store.put(archived, VAULT_KEY)
-  await tx.store.delete(PREVIOUS_VAULT_KEY)
+  // The displaced vault takes the archive slot. With no live record to displace
+  // the slot is cleared instead, so it can never be left pointing at the record
+  // that is now live — which would offer to "put back" the vault already open.
+  if (live) await tx.store.put(live, PREVIOUS_VAULT_KEY)
+  else await tx.store.delete(PREVIOUS_VAULT_KEY)
   await tx.done
   return archived
 }
@@ -164,11 +173,21 @@ export async function loadVault(): Promise<StoredVault | undefined> {
   return (await db()).get('vault', VAULT_KEY)
 }
 
+/**
+ * Erase the vault, the copy set aside, and the practice schedule.
+ *
+ * One transaction across both stores rather than three deletes in a row: an
+ * interruption between them could leave the archive behind with no live vault,
+ * and since `decisions/0016` the lock screen would then offer to put a vault
+ * the user had just deleted back — over whatever they created next.
+ */
 export async function deleteVault(): Promise<void> {
   const database = await db()
-  await database.delete('vault', VAULT_KEY)
-  await database.delete('vault', PREVIOUS_VAULT_KEY)
-  await database.delete('meta', META_KEY)
+  const tx = database.transaction(['vault', 'meta'], 'readwrite')
+  await tx.objectStore('vault').delete(VAULT_KEY)
+  await tx.objectStore('vault').delete(PREVIOUS_VAULT_KEY)
+  await tx.objectStore('meta').delete(META_KEY)
+  await tx.done
 }
 
 export async function savePracticeMeta(meta: PracticeMeta): Promise<void> {

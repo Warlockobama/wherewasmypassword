@@ -336,6 +336,12 @@ export default function App() {
             setPhase('unlocked')
           }}
           onRestored={(restoredVault) => {
+            // A restore or an undo replaces the live record just as a
+            // passphrase change does, and any other copy of the UI is holding a
+            // key on the salt that was live a moment ago. Left open it would
+            // show credentials no longer on disk, and its next save would fail.
+            // Lock it. A BroadcastChannel does not deliver to its own sender.
+            lockChannel?.postMessage('lock')
             setStored(restoredVault)
             setMeta(freshPracticeMeta(restoredVault.createdAt))
           }}

@@ -34,15 +34,23 @@ vi.mock('idb', () => ({
     delete: async (name: string, key: string) => {
       store.get(name)?.delete(key)
     },
-    transaction: (name: string) => ({ store: objectStore(name), done: Promise.resolve() }),
+    // Single-store callers read `tx.store`; the multi-store ones name what they
+    // want with `tx.objectStore(...)`.
+    transaction: (name: string | string[]) => ({
+      store: objectStore(Array.isArray(name) ? name[0] : name),
+      objectStore,
+      done: Promise.resolve(),
+    }),
   }),
 }))
 
 const {
   archiveCurrentVault,
+  deleteVault,
   loadArchivedVault,
   loadPracticeMeta,
   loadVault,
+  savePracticeMeta,
   saveVault,
   undoRestore,
 } = await import('./db.ts')
@@ -101,8 +109,9 @@ describe('practice metadata on disk', () => {
  * The archive was written on every restore and never read back, which made the
  * dialog's "the current vault is kept aside" a promise the app could not keep
  * (`decisions/0016`). These cover the read-back: that it puts the right record
- * live, that it does not leave a copy behind to be undone twice, and that it
- * says so rather than destroying anything when there is nothing to undo.
+ * live, that the record it displaces takes the archive slot so nothing is ever
+ * thrown away, and that it says so rather than destroying anything when there
+ * is nothing to undo.
  */
 describe('undoing a restore', () => {
   const mine = vaultRecord('salt-mine', t0)
@@ -119,18 +128,36 @@ describe('undoing a restore', () => {
     expect(await loadVault()).toEqual(mine)
   })
 
-  it('consumes the archive, so the same undo is not offered twice', async () => {
+  it('sets the displaced vault aside, so a mistaken press is reversible', async () => {
+    // The undo stays on the lock screen for as long as an archive exists, which
+    // can be months — by which time the live vault holds edits that are in no
+    // backup file. Consuming the archive would let one curious press destroy
+    // them: the same unrecoverable loss this exists to remove, pointed the
+    // other way.
     await saveVault(mine)
     await archiveCurrentVault()
     await saveVault(theirs)
 
     await undoRestore()
-
-    expect(await loadArchivedVault()).toBeUndefined()
-    // The second call must be a no-op, not a write of `undefined` over the
-    // vault that was just put back.
-    expect(await undoRestore()).toBeUndefined()
     expect(await loadVault()).toEqual(mine)
+    expect(await loadArchivedVault()).toEqual(theirs)
+
+    // Pressing again puts things back exactly as they were.
+    expect(await undoRestore()).toEqual(theirs)
+    expect(await loadVault()).toEqual(theirs)
+    expect(await loadArchivedVault()).toEqual(mine)
+  })
+
+  it('never leaves the archive pointing at the vault that is now live', async () => {
+    // An archive with no live record beside it is not a state the app can
+    // reach today, which is exactly why it is worth pinning: swapping in an
+    // absent record would leave the archive holding the vault that is now
+    // open, and the lock screen offering to put back what is already there.
+    store.set('vault', new Map([['previous', mine]]))
+
+    expect(await undoRestore()).toEqual(mine)
+    expect(await loadVault()).toEqual(mine)
+    expect(await loadArchivedVault()).toBeUndefined()
   })
 
   it('does nothing when no restore was ever made', async () => {
@@ -140,10 +167,27 @@ describe('undoing a restore', () => {
     expect(await loadVault()).toEqual(mine)
   })
 
+  it('leaves nothing set aside when the vault is deleted', async () => {
+    // "Delete vault & start over" has to mean it. An archive that survived
+    // would put a whole encrypted vault — and a lock screen offering to open
+    // it — in front of someone who just erased everything.
+    await saveVault(mine)
+    await archiveCurrentVault()
+    await saveVault(theirs)
+    await savePracticeMeta({ createdAt: t0, practiceCount: 3, lastPracticedAt: t0 + DAY })
+
+    await deleteVault()
+
+    expect(await loadVault()).toBeUndefined()
+    expect(await loadArchivedVault()).toBeUndefined()
+    expect(await loadPracticeMeta()).toBeUndefined()
+  })
+
   it('keeps only the most recently replaced vault', async () => {
-    // Two restores in a row: the first vault is gone for good, which is what
-    // the retention rule in the ruling says and what the dialog now implies by
-    // offering the undo only once.
+    // Two restores in a row: the first vault is gone for good. That is the
+    // retention the ruling asked for — one slot, overwritten by the next
+    // restore — and the reason the undo is offered on the lock screen where a
+    // wrong restore is noticed, rather than saved up for later.
     const third = vaultRecord('salt-third', t0 + 2 * DAY)
     await saveVault(mine)
     await archiveCurrentVault()
