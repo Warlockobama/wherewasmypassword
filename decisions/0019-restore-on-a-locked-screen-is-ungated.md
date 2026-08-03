@@ -176,3 +176,83 @@ fail-closed validation, coexistence with the practice schedule, and survival of
 **Prose corrected.** The README paragraph that said restore was ungated, the
 comment in `LockScreen.tsx` that said so, the header of `undo.test.ts` that said
 so, and the note in `0018` that left it open.
+
+## Adversarial review, same day
+
+Run against the finished change, told to look for ways around the gate rather
+than to confirm it. It found no reachable bypass — every write of the vault
+record was enumerated, and the ones that are not `restoreVault` all require a
+completed unlock — and no exploitable race. Six things were worth fixing, and
+two of them were the same failure this doc opened with, committed again.
+
+**The hook could be defeated by an `async` callback, silently.** `authorize` is
+typed to return nothing, and TypeScript accepts an `async` function there — a
+promise is assignable to a `void` return. Held that way, a refusal becomes a
+rejected promise nobody awaits: it surfaces as an unhandled error somewhere
+else entirely while *both* writes go ahead as though the restore had been
+approved. The comment beside it claimed the compiler enforced what this
+function needs; the compiler enforced that an argument exists, not that it can
+say no. `restoreVault` now refuses anything that comes back from the hook at
+all, since the safe reading of "I cannot tell whether this was authorised" is
+no. Pinned in `db.test.ts`.
+
+**The README claimed at all three settings what is only true at one.** "There
+is still one slot … the difference is that spending it now means opening the
+vault the first restore installed" — true at `both`, and flatly false at
+`incoming`, where two files of a stranger's and two presses still leave no copy
+of the vault this device started with. That is the exact harm this doc was
+written about, described as fixed, two sentences after offering the setting
+that re-opens it. Both the README and the setting's own copy now say what the
+weaker choice costs, and a test pins the loss at `incoming` beside one pinning
+that the default closes it at the first press — so the claim cannot drift from
+the code again without a test going red.
+
+**`prove.ts` said it was asking who, not what.** Answering "does this phrase
+open this record" means decrypting it, because the tag is the answer — so the
+whole plaintext, credentials and all, exists in the heap for a moment. The key
+is zeroed; the plaintext is a decoded string and a parsed object and cannot be.
+`0019` widened where that happens: until now only the *archived* record was
+proven, and the restore gate proves the *live* one, on the screen whose
+ordinary contract is that its contents are not in memory. A verify-only decrypt
+would shrink it to one buffer that could be overwritten, and is deliberately
+not done — it would stop distinguishing a damaged record from a wrong phrase,
+which `0018`'s undo relies on. The comment now says all of this instead of the
+opposite.
+
+**Three smaller ones.** `NO_PROOFS` was a mutable exported singleton handed
+straight into React state and into the commit — one stray assignment would have
+weakened every restore in the process; it is frozen, and the freezing is
+tested. The incoming proof was a bare boolean where the live proof carried its
+record, so a proof of one file could have authorised installing another; both
+halves now name their record and the commit checks both. And the lock screen's
+instruction to a locked-out user pointed at "Housekeeping", which is the panel
+containing *Delete vault & start over* — the setting is its own panel above it.
+
+**Two more, taken further than the review asked.** The sequencing behind the
+passphrase field — which record is asked for, and the opportunistic try of one
+phrase against both — was a forty-line handler no test could reach, which is
+where a regression in a two-step gate would land. It is `proveNextForRestore`
+in `restore.ts` now, with nine tests on real Argon2id. And when the gate is
+turned off, the panel says so: the absence of a passphrase field was the only
+signal, and the setting outlives the vault it was chosen for, so a device whose
+gate is disarmed says it on the screen that would otherwise just work.
+
+**Left uncovered, deliberately, and worth saying rather than implying.** The
+`idb` mock these suites share has no transaction semantics — writes land in a
+`Map` immediately and there is no `abort`. So "writes nothing when the restore
+is not authorised" proves that no write was *issued*, which is the true
+property here, but nothing in the suite can reach a partially-issued
+transaction rolling back. Closing that means a real fake-IndexedDB, which is a
+dependency and a change to how every storage test is written; it is not worth
+it for this change alone. And there is still no test of the React component
+itself — the extraction above moved the part worth testing out of it, but the
+wiring around it is looked at, not tested.
+
+**One thing the review found that is *not* fixed here.** The last step of
+onboarding writes the vault record unconditionally, so two tabs finishing two
+tutorials on a fresh browser leaves one vault destroyed with nothing set aside
+— strictly worse than the restore path this doc just gated, because there is
+nothing to undo. It is not reachable from a locked screen and it predates all
+of this, but it is the last path that can destroy a vault with no copy kept.
+What that screen should do instead is a call rather than a patch, so it is
+`0020`.

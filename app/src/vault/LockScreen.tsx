@@ -12,10 +12,10 @@ import type { RestoreGate } from '../storage/settings.ts'
 import { isExtensionContext } from '../platform.ts'
 import { clearPopupSession } from '../popup/session.ts'
 import { upgradeNeeded, upgradeOnUnlock } from './seal.ts'
-import { provePassphrase } from './prove.ts'
 import {
   awaitingProof,
   NO_PROOFS,
+  proveNextForRestore,
   requiredProofs,
   RestoreGateError,
   restoreVaultWithProof,
@@ -197,6 +197,10 @@ export default function LockScreen({
       // context may have saved or re-keyed the live vault since this screen
       // mounted, and the record the undo offers has to be the one on disk — it
       // is what the passphrase gate will be asked to match.
+      // A read that fails hides the undo offer until this screen is next
+      // mounted; the archive is on disk either way. Hiding an offer is the safe
+      // direction to fail in — the alternative is offering to swap in a record
+      // nothing just read.
       const nowAside = await loadArchivedVault().catch(() => undefined)
       const restored = pendingRestore
       setPendingRestore(null)
@@ -229,15 +233,11 @@ export default function LockScreen({
   }
 
   /**
-   * Prove one of the phrases the gate asks for (`decisions/0019`).
+   * Answer whichever of the gate's questions is outstanding (`decisions/0019`).
    *
-   * The backup's phrase is asked for first: if the file cannot be opened at all
-   * there is no point troubling anyone about the vault it would replace. When
-   * both are wanted, the phrase that opened the backup is tried against the
-   * live vault as well before asking again — restoring your own newer export is
-   * the ordinary case, and one phrase opens both there. The wasted derive when
-   * they differ costs a second on a path that already spends two, which is
-   * cheaper than making everyone type the same words twice.
+   * Which record that means, and the opportunistic try of one phrase against
+   * both, live in `proveNextForRestore` rather than here — it is the part worth
+   * testing against real Argon2id, and a handler is where tests do not reach.
    */
   const submitRestoreProof = async () => {
     if (!pendingRestore || !awaiting || !restorePhrase.trim()) return
@@ -247,26 +247,13 @@ export default function LockScreen({
     setRestoreBusy(true)
     setRestoreError(null)
     try {
-      let next: RestoreProofs
-      if (awaiting === 'incoming') {
-        await provePassphrase(restorePhrase, pendingRestore)
-        let alsoLive: StoredVault | null = null
-        if (required.live) {
-          try {
-            await provePassphrase(restorePhrase, stored)
-            alsoLive = stored
-          } catch (err) {
-            // Only a wrong phrase means "ask for the other one". Anything else
-            // — key-derivation parameters this browser will not run, say — is a
-            // real failure of the live record and has to be seen, not swallowed.
-            if (!(err instanceof WrongPassphraseError)) throw err
-          }
-        }
-        next = { incoming: true, live: alsoLive }
-      } else {
-        await provePassphrase(restorePhrase, stored)
-        next = { ...proofs, live: stored }
-      }
+      const next = await proveNextForRestore(
+        restorePhrase,
+        pendingRestore,
+        stored,
+        required,
+        proofs,
+      )
       setProofs(next)
       setRestorePhrase('')
       if (!awaitingProof(required, next)) await commitRestore(next)
@@ -445,9 +432,21 @@ export default function LockScreen({
               That opens the backup. Now the passphrase of <em>the vault on this device</em> — the
               one about to be pushed aside. This half is what says the vault being replaced is
               yours to replace. If you no longer have it, this browser will not restore over that
-              vault: unlock it and change <strong>Restoring a backup</strong> there, or clear{' '}
-              {isExtensionContext() ? 'this extension’s data' : 'this site’s data'} to erase a
-              vault you could not open anyway.
+              vault: unlock it and change the <strong>Restoring a backup</strong> setting there,
+              or clear {isExtensionContext() ? 'this extension’s data' : 'this site’s data'} to
+              erase a vault you could not open anyway.
+            </p>
+          )}
+          {/* The one state where the absence of a passphrase field is itself
+              worth saying. Turning the gate off is a deliberate choice made
+              from inside an unlocked vault, and it outlives the vault it was
+              made for — so the screen it affects says so rather than letting a
+              missing field pass for "nothing to ask". */}
+          {!awaiting && gate === 'off' && (
+            <p>
+              This device is set to replace the vault without asking for anything first — anyone
+              here with a backup file can do this. The setting is <strong>Restoring a backup</strong>{' '}
+              in the unlocked app.
             </p>
           )}
           {awaiting ? (
@@ -575,7 +574,7 @@ export default function LockScreen({
               <Button
                 className="!border-brick !bg-brick"
                 onClick={() => void confirmUndo()}
-                disabled={!undoPhrase.trim() || undoBusy || busy}
+                disabled={!undoPhrase.trim() || undoBusy || busy || restoreBusy}
               >
                 {undoBusy ? 'Deriving key…' : 'Put the previous vault back'}
               </Button>

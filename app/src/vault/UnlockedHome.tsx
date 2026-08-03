@@ -427,7 +427,7 @@ function RestoreGateSetting() {
       value: 'incoming',
       label: 'The backup file’s passphrase only',
       detail:
-        'Proves the file is one you can open. Does not stop someone restoring a vault of their own over yours.',
+        'Proves the file is one you can open. Does not stop someone restoring a vault of their own over yours — and doing it twice with two of their files leaves no copy of yours.',
     },
     {
       value: 'off',

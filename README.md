@@ -131,11 +131,14 @@ you can't hide something in a drawer and open it later. The illustrated house ca
   to the file's phrase alone, or to nothing — and only from there, because a switch that
   turned the gate off from the lock screen would *be* the gate (`decisions/0019`).
   Two things this does not change. There is still one slot for the vault set aside, so a
-  second restore spends it — the difference is that spending it now means opening the
-  vault the first restore installed. And with the default setting and no memory of this
-  device's phrase, this browser will not restore over that vault at all: the way out is
-  to clear the extension's data, erasing a vault nobody could have opened. Keep your own
-  export somewhere else.
+  second restore spends it — **at the default setting** that now means opening the vault
+  the first restore installed, but at either weaker setting the original two-restore
+  path is exactly as open as it was: two files of someone else's, two presses, and the
+  vault this device started with is gone from disk. That is the cost of turning the
+  second half off, and it is why it is not the default. And with the default setting and
+  no memory of this device's phrase, this browser will not restore over that vault at
+  all: the way out is to clear the extension's data, erasing a vault nobody could have
+  opened. Keep your own export somewhere else.
 
 **Known limitation:** Copy remains the fallback for pages autofill cannot reach, and is
 only offered in the full tab. It clears the clipboard 30 seconds after you return to that

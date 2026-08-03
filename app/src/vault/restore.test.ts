@@ -62,10 +62,10 @@ vi.mock('idb', () => ({
 
 const { loadArchivedVault, loadVault, saveVault, saveVaultSettings, VaultSupersededError } =
   await import('../storage/db.ts')
-const { provePassphrase } = await import('./prove.ts')
 const {
   awaitingProof,
   NO_PROOFS,
+  proveNextForRestore,
   requiredProofs,
   RestoreGateError,
   restoreVaultWithProof,
@@ -119,29 +119,11 @@ beforeEach(async () => {
   await saveVault(mine)
 })
 
-/** What the lock screen does with a phrase: try it, and remember what it opened. */
-async function prove(
-  passphrase: string,
-  incoming: StoredVault,
-  live: StoredVault,
-): Promise<{ incoming: boolean; live: StoredVault | null }> {
-  const proofs: { incoming: boolean; live: StoredVault | null } = { incoming: false, live: null }
-  await provePassphrase(passphrase, incoming)
-    .then(() => {
-      proofs.incoming = true
-    })
-    .catch((err: unknown) => {
-      if (!(err instanceof WrongPassphraseError)) throw err
-    })
-  await provePassphrase(passphrase, live)
-    .then(() => {
-      proofs.live = live
-    })
-    .catch((err: unknown) => {
-      if (!(err instanceof WrongPassphraseError)) throw err
-    })
-  return proofs
-}
+const BOTH = { incoming: true, live: true }
+
+/** One turn of the lock screen's field: type a phrase, get back what is proven. */
+const answer = (passphrase: string, incoming: StoredVault, live: StoredVault, proofs = NO_PROOFS) =>
+  proveNextForRestore(passphrase, incoming, live, BOTH, proofs)
 
 describe('what a restore has to prove', () => {
   it('asks for both passphrases by default', () => {
@@ -159,23 +141,100 @@ describe('what a restore has to prove', () => {
   })
 
   it('names the outstanding proof in the order the screen asks for them', () => {
-    const both = requiredProofs('both', true)
-    expect(awaitingProof(both, NO_PROOFS)).toBe('incoming')
-    expect(awaitingProof(both, { incoming: true, live: null })).toBe('live')
-    expect(awaitingProof(both, { incoming: true, live: mine })).toBeNull()
+    expect(awaitingProof(BOTH, NO_PROOFS)).toBe('incoming')
+    expect(awaitingProof(BOTH, { incoming: theirs, live: null })).toBe('live')
+    expect(awaitingProof(BOTH, { incoming: theirs, live: mine })).toBeNull()
     // A live proof alone does not let the backup through: the file still has to
     // be one that opens, which is the half that stops a wrong file replacing a
     // good vault with something nobody can ever read.
-    expect(awaitingProof(both, { incoming: false, live: mine })).toBe('incoming')
+    expect(awaitingProof(BOTH, { incoming: null, live: mine })).toBe('incoming')
+  })
+
+  it('does not hand out a proof it was not given the phrase for', () => {
+    // `NO_PROOFS` is handed straight into React state and into the commit. If
+    // anything ever mutated it, every restore in the process would start out
+    // half-authorised.
+    expect(Object.isFrozen(NO_PROOFS)).toBe(true)
+    expect(NO_PROOFS).toEqual({ incoming: null, live: null })
+  })
+})
+
+/**
+ * The sequencing the lock screen's passphrase field drives. It used to live
+ * inline in the component, where no test could reach it — which is where a
+ * regression in a two-step gate would actually land.
+ */
+describe('answering the gate one phrase at a time', () => {
+  it('takes the backup’s phrase first, and asks for the live one next', async () => {
+    const first = await answer(THEIRS, theirs, mine)
+
+    expect(first).toEqual({ incoming: theirs, live: null })
+    expect(awaitingProof(BOTH, first)).toBe('live')
+
+    const second = await answer(MINE, theirs, mine, first)
+
+    expect(second).toEqual({ incoming: theirs, live: mine })
+    expect(awaitingProof(BOTH, second)).toBeNull()
+  })
+
+  it('settles both halves at once when one phrase opens both', async () => {
+    // Restoring your own newer export: the phrase that opened the file is tried
+    // against the live vault before a second field is put in front of anyone.
+    const ownBackup = await sealed(MINE, 'mine-yesterday', t0 - 1000)
+
+    expect(await answer(MINE, ownBackup, mine)).toEqual({ incoming: ownBackup, live: mine })
+  })
+
+  it('refuses a phrase that opens neither, proving nothing', async () => {
+    await expect(answer('not either phrase', theirs, mine)).rejects.toBeInstanceOf(
+      WrongPassphraseError,
+    )
+  })
+
+  it('refuses the live vault’s phrase while the backup is what is being asked for', async () => {
+    // The order matters: an attacker's own file plus this device's phrase is
+    // not a combination that should get anywhere, and neither is the reverse.
+    await expect(answer(MINE, theirs, mine)).rejects.toBeInstanceOf(WrongPassphraseError)
+  })
+
+  it('refuses the backup’s phrase when the live vault is what is being asked for', async () => {
+    const first = await answer(THEIRS, theirs, mine)
+
+    await expect(answer(THEIRS, theirs, mine, first)).rejects.toBeInstanceOf(WrongPassphraseError)
+  })
+
+  it('surfaces a live vault it cannot even attempt, rather than asking again', async () => {
+    // The opportunistic second try swallows a wrong phrase and nothing else.
+    // Key-derivation parameters this browser will not run are a real failure of
+    // the live record, and turning that into "type it again" would leave the
+    // user retyping a correct phrase forever.
+    const absurd = { ...mine, kdfParams: { ...TEST_KDF, memoryKiB: 2 * 1024 * 1024 } }
+
+    await expect(answer(THEIRS, theirs, absurd)).rejects.toThrow(
+      /unsupported key-derivation settings/,
+    )
+  })
+
+  it('does nothing when the gate is already satisfied', async () => {
+    const done = { incoming: theirs, live: mine }
+
+    expect(await proveNextForRestore('anything', theirs, mine, BOTH, done)).toBe(done)
+  })
+
+  it('does not go looking for the live vault when only the backup is wanted', async () => {
+    const only = { incoming: true, live: false }
+
+    expect(await proveNextForRestore(THEIRS, theirs, mine, only, NO_PROOFS)).toEqual({
+      incoming: theirs,
+      live: null,
+    })
   })
 })
 
 describe('restoring a backup over the vault on this device', () => {
   it('goes through when both phrases have been proven', async () => {
-    const proofs = await prove(THEIRS, theirs, mine)
-    // Different vaults, different phrases: only the backup opened.
-    expect(proofs).toEqual({ incoming: true, live: null })
-    proofs.live = mine // as the screen records it after the second field
+    let proofs = await answer(THEIRS, theirs, mine)
+    proofs = await answer(MINE, theirs, mine, proofs)
 
     await restoreVaultWithProof(theirs, proofs)
 
@@ -184,15 +243,9 @@ describe('restoring a backup over the vault on this device', () => {
   })
 
   it('takes one phrase for both when one phrase opens both', async () => {
-    // Restoring your own newer export is the ordinary case. The screen tries
-    // the phrase that opened the file against the live vault before asking
-    // again, and here that is enough.
     const ownBackup = await sealed(MINE, 'mine-yesterday', t0 - 1000)
 
-    const proofs = await prove(MINE, ownBackup, mine)
-    expect(proofs).toEqual({ incoming: true, live: mine })
-
-    await restoreVaultWithProof(ownBackup, proofs)
+    await restoreVaultWithProof(ownBackup, await answer(MINE, ownBackup, mine))
 
     expect(await loadVault()).toEqual(ownBackup)
     expect(await loadArchivedVault()).toEqual(mine)
@@ -202,7 +255,7 @@ describe('restoring a backup over the vault on this device', () => {
     // The two-restore path `0019` is about: someone with their own backup file
     // at a locked machine. Under the old behaviour this went through twice and
     // took the archive slot with it.
-    const proofs = await prove(THEIRS, theirs, mine)
+    const proofs = await answer(THEIRS, theirs, mine)
 
     await expect(restoreVaultWithProof(theirs, proofs)).rejects.toBeInstanceOf(RestoreGateError)
     await expect(restoreVaultWithProof(theirs, proofs)).rejects.toMatchObject({ missing: 'live' })
@@ -212,12 +265,9 @@ describe('restoring a backup over the vault on this device', () => {
   })
 
   it('refuses, and changes nothing, with only this device’s phrase', async () => {
-    const proofs = await prove(MINE, theirs, mine)
-    expect(proofs).toEqual({ incoming: false, live: mine })
-
-    await expect(restoreVaultWithProof(theirs, proofs)).rejects.toMatchObject({
-      missing: 'incoming',
-    })
+    await expect(
+      restoreVaultWithProof(theirs, { incoming: null, live: mine }),
+    ).rejects.toMatchObject({ missing: 'incoming' })
 
     expect(await loadVault()).toEqual(mine)
   })
@@ -229,17 +279,54 @@ describe('restoring a backup over the vault on this device', () => {
 
     expect(await loadVault()).toEqual(mine)
   })
+
+  it('refuses to install a file other than the one that was proven', async () => {
+    // A proof of one backup does not authorise writing another. The screen
+    // holds one staged record and cannot reach this, which is exactly why the
+    // rule is worth making structural rather than a property of one caller.
+    const somebodyElses = await sealed('third phrase entirely', 'theirs-too', t0 + 2000)
+    const proofs = { incoming: theirs, live: mine }
+
+    await expect(restoreVaultWithProof(somebodyElses, proofs)).rejects.toMatchObject({
+      missing: 'incoming',
+    })
+
+    expect(await loadVault()).toEqual(mine)
+    expect(await loadArchivedVault()).toBeUndefined()
+  })
 })
 
 describe('the gate the device is set to', () => {
   it('asks only for the backup’s phrase when set to that', async () => {
     await saveVaultSettings({ restoreGate: 'incoming' })
-    const proofs = await prove(THEIRS, theirs, mine)
 
-    await restoreVaultWithProof(theirs, proofs)
+    await restoreVaultWithProof(theirs, { incoming: theirs, live: null })
 
     expect(await loadVault()).toEqual(theirs)
     expect(await loadArchivedVault()).toEqual(mine)
+  })
+
+  it('leaves the two-restore loss wide open when set to that, which is the cost', async () => {
+    // The exact harm `0019` opened with, and the reason this is not the
+    // default: two files of someone else's, two presses, and the vault this
+    // device started with is gone from disk with no phrase of its owner's
+    // typed. Pinned rather than described, because the README makes a claim
+    // about it that has to stay true.
+    await saveVaultSettings({ restoreGate: 'incoming' })
+    const second = await sealed('their other phrase', 'theirs-too', t0 + 2000)
+
+    await restoreVaultWithProof(theirs, { incoming: theirs, live: null })
+    await restoreVaultWithProof(second, { incoming: second, live: null })
+
+    expect(await loadVault()).toEqual(second)
+    expect(await loadArchivedVault()).toEqual(theirs)
+  })
+
+  it('closes that path at the default, at the first press', async () => {
+    await restoreVaultWithProof(theirs, { incoming: theirs, live: null }).catch(() => {})
+
+    expect(await loadVault()).toEqual(mine)
+    expect(await loadArchivedVault()).toBeUndefined()
   })
 
   it('still wants the backup’s phrase when set to that', async () => {
@@ -290,7 +377,7 @@ describe('the vault being replaced changing underneath', () => {
     // Proving a phrase takes about a second, and a passphrase change in another
     // tab inside it leaves a vault this proof says nothing about. Replacing it
     // anyway would be the gate answering a question nobody asked.
-    const proofs = { incoming: true, live: mine }
+    const proofs = { incoming: theirs, live: mine }
     const reKeyed = await sealed('an entirely new phrase', 'mine', t0 + 5000)
     await saveVault(reKeyed)
 
@@ -306,7 +393,7 @@ describe('the vault being replaced changing underneath', () => {
     // Saving a credential in another tab rewrites the ciphertext of the same
     // vault under the same key. The phrase that was typed still opens it, so
     // refusing here would be pedantry that costs the user the restore.
-    const proofs = { incoming: true, live: mine }
+    const proofs = { incoming: theirs, live: mine }
     const edited = { ...mine, ciphertext: btoa('one more credential'), updatedAt: t0 + 5000 }
     await saveVault(edited)
 
