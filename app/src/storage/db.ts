@@ -1,6 +1,7 @@
 import { openDB, type DBSchema } from 'idb'
 import type { KdfParams } from '../crypto/kdf.ts'
 import type { VaultFormatVersion } from '../crypto/vault.ts'
+import { asVaultSettings, DEFAULT_SETTINGS, type VaultSettings } from './settings.ts'
 
 /** Everything in this record is safe to store in plaintext: ciphertext,
  *  salt, and KDF params reveal nothing without the passphrase. */
@@ -43,15 +44,22 @@ export function freshPracticeMeta(createdAt: number): PracticeMeta {
   return { createdAt, practiceCount: 0, lastPracticedAt: null }
 }
 
+/**
+ * The `meta` store holds two unrelated records under two keys — the practice
+ * schedule and the device preferences — rather than one shape. It is named for
+ * the only thing it held first; see `settings.ts` for why a store of its own
+ * was not worth a schema version bump.
+ */
 interface WwmpDB extends DBSchema {
   vault: { key: string; value: StoredVault }
-  meta: { key: string; value: PracticeMeta }
+  meta: { key: string; value: PracticeMeta | VaultSettings }
 }
 
 const DB_NAME = 'wherewasmypassword'
 const VAULT_KEY = 'primary'
 const PREVIOUS_VAULT_KEY = 'previous'
 const META_KEY = 'practice'
+const SETTINGS_KEY = 'settings'
 
 function db() {
   return openDB<WwmpDB>(DB_NAME, 1, {
@@ -116,11 +124,54 @@ export async function saveVault(record: StoredVault, expecting?: StoredVault): P
  * gate in `vault/undo.ts` closed the read side of that second-wide window
  * (`decisions/0018`); this is the write side, and a gate the write side can
  * walk around is not a gate.
+ *
+ * This is the storage half only. Nothing in the UI may call it directly: since
+ * `decisions/0019` a restore is gated too, and the policy lives in
+ * `vault/restore.ts`.
  */
-export async function restoreVault(incoming: StoredVault): Promise<void> {
+export async function restoreVault(
+  incoming: StoredVault,
+  /**
+   * Called inside the transaction with the record about to be displaced —
+   * `undefined` when there is no live vault — and expected to throw if this
+   * restore is not allowed to happen. Nothing has been written when it runs, so
+   * throwing leaves both slots exactly as they were.
+   *
+   * The check is a callback rather than a value the caller compares beforehand
+   * because what it has to judge is the record actually being replaced. A
+   * caller that read the live vault, decided, and then called in would be
+   * deciding about a record another context can swap out in between — and the
+   * whole of `0019` is that a restore must not overwrite a vault nobody
+   * authenticated.
+   *
+   * Required, not optional, for the reason `undoRestore`'s `expecting` is: a
+   * future caller writing `restoreVault(file)` would otherwise get the ungated
+   * write and a clean build, and the comment above would be a rule the compiler
+   * never enforces.
+   *
+   * It must decide *synchronously*. An `await` here would end the transaction —
+   * IndexedDB commits one the moment its microtask queue drains — and the two
+   * writes below would then land outside it, which is the un-atomic
+   * archive-then-save this function exists to replace.
+   */
+  authorize: (live: StoredVault | undefined) => void,
+): Promise<void> {
   const database = await db()
   const tx = database.transaction('vault', 'readwrite')
   const current = await tx.store.get(VAULT_KEY)
+  // Before either write. A transaction with no requests outstanding commits
+  // nothing, so an exception here is simply a restore that did not happen.
+  const returned: unknown = authorize(current)
+  // TypeScript accepts an `async` function where a `void` return is expected —
+  // a promise is assignable to `void`. Held that way this would be the worst
+  // shape it could take: a refusal would become a rejected promise nobody
+  // awaits, surfacing as an unhandled error somewhere else entirely, while both
+  // writes below went ahead as though the restore had been approved. Anything
+  // coming back at all means the caller is not the shape this needs, and the
+  // safe reading of "I cannot tell whether this was authorised" is no.
+  if (returned !== undefined) {
+    throw new TypeError('restoreVault: authorize must decide synchronously')
+  }
   if (current) await tx.store.put(current, PREVIOUS_VAULT_KEY)
   await tx.store.put(incoming, VAULT_KEY)
   await tx.done
@@ -270,7 +321,9 @@ export async function savePracticeMeta(meta: PracticeMeta): Promise<void> {
 
 export async function loadPracticeMeta(): Promise<PracticeMeta | undefined> {
   const database = await db()
-  const stored = await database.get('meta', META_KEY)
+  // The store holds settings under another key as well, so what comes back here
+  // is only a practice record because of the key it was asked for.
+  const stored = (await database.get('meta', META_KEY)) as PracticeMeta | undefined
   if (!stored) return undefined
   const migrated = migratePracticeMeta(stored)
   // Rewrite immediately when the shape changed: the point of the fix is that
@@ -300,6 +353,39 @@ export function migratePracticeMeta(stored: PracticeMeta | LegacyPracticeMeta): 
     practiceCount: legacy.length || (typeof partial.practiceCount === 'number' ? partial.practiceCount : 0),
     lastPracticedAt: legacy.length ? legacy.reduce((a, b) => Math.max(a, b)) : null,
   }
+}
+
+/**
+ * The device preferences, or the strictest defaults.
+ *
+ * Never throws and never returns "no gate": a database that will not open, a
+ * record that is not there yet, and a record someone rewrote all resolve to
+ * `DEFAULT_SETTINGS`. The caller is a security decision on the lock screen, and
+ * the one answer it must not get from a failure is the permissive one.
+ *
+ * Deliberately not cached. It is read again at the moment a restore is
+ * committed rather than once when the screen mounted, so a gate that was raised
+ * in another tab is the gate that applies.
+ */
+export async function loadVaultSettings(): Promise<VaultSettings> {
+  try {
+    return asVaultSettings(await (await db()).get('meta', SETTINGS_KEY))
+  } catch {
+    return DEFAULT_SETTINGS
+  }
+}
+
+/**
+ * Write the device preferences.
+ *
+ * Not touched by `deleteVault`. "Delete vault & start over" erases the vault,
+ * the copy set aside and the practice schedule — everything about a particular
+ * vault — and a preference about how this browser behaves is not about any
+ * vault. Clearing it would also silently re-arm a gate the user had turned off,
+ * on the screen they would next meet.
+ */
+export async function saveVaultSettings(settings: VaultSettings): Promise<void> {
+  await (await db()).put('meta', settings, SETTINGS_KEY)
 }
 
 /** Ask the browser not to evict our storage under pressure. */

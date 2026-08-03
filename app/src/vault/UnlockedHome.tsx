@@ -4,7 +4,14 @@ import type { VaultData } from '../crypto/vault.ts'
 import { ClueCard, EmptySlot } from '../palace/rooms/shared.tsx'
 import { LOCI } from '../palace/loci.ts'
 import { downloadBackup } from '../storage/backup.ts'
-import { deleteVault, VaultSupersededError, type StoredVault } from '../storage/db.ts'
+import {
+  deleteVault,
+  loadVaultSettings,
+  saveVaultSettings,
+  VaultSupersededError,
+  type StoredVault,
+} from '../storage/db.ts'
+import type { RestoreGate } from '../storage/settings.ts'
 import { Button, Panel, Screen, Title } from '../ui.tsx'
 import { isExtensionContext } from '../platform.ts'
 import type { Credential } from '../credentials/types.ts'
@@ -252,6 +259,8 @@ export default function UnlockedHome({
 
       <PopupSessionSetting />
 
+      <RestoreGateSetting />
+
       <Panel className="w-full space-y-3">
         <h2 className="font-display text-lg text-dusk">Housekeeping</h2>
         <div className="flex flex-wrap gap-3">
@@ -359,6 +368,113 @@ function PopupSessionSetting() {
         up, anyone at this computer can fill your passwords without knowing the phrase. Turning
         this off ends any session already running, and so does <strong>Lock now</strong>.
       </p>
+    </Panel>
+  )
+}
+
+/**
+ * How hard the lock screen makes it to restore a backup over this vault
+ * (`decisions/0019`).
+ *
+ * It is here, behind the passphrase, and nowhere else on purpose. A switch that
+ * could weaken the gate from the lock screen would *be* the gate — a moment at
+ * a locked machine would be enough to turn it off and then restore. Raising it
+ * from here and lowering it from here are the same control, and both cost an
+ * unlock.
+ *
+ * Which leaves one sharp edge worth naming rather than hiding: with the default
+ * setting and no memory of this vault's phrase, this browser will not restore
+ * over it. That is the trade James chose, and the way out is outside the app —
+ * clearing the extension's data erases a vault nobody could open. The prose
+ * below says so.
+ *
+ * Unlike the popup session, this is not hidden outside the extension. The lock
+ * screen that enforces it exists in the hosted build too, and the setting lives
+ * in the same database as the vault so that it is readable there.
+ */
+function RestoreGateSetting() {
+  const [gate, setGate] = useState<RestoreGate | null>(null)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    void loadVaultSettings()
+      .then((s) => setGate(s.restoreGate))
+      // `loadVaultSettings` swallows its own failures and answers with the
+      // strictest default, so this only fires if the promise itself is broken.
+      .catch(() => setGate('both'))
+  }, [])
+
+  if (gate === null) return null
+
+  const choose = (next: RestoreGate) => {
+    setFailed(false)
+    // The radio follows the write rather than leading it, exactly as the popup
+    // switch does: a refused write must leave the user looking at what is
+    // actually true, and this one governs what a locked screen will allow.
+    void saveVaultSettings({ restoreGate: next })
+      .then(() => setGate(next))
+      .catch(() => setFailed(true))
+  }
+
+  const OPTIONS: { value: RestoreGate; label: string; detail: string }[] = [
+    {
+      value: 'both',
+      label: 'Both passphrases (recommended)',
+      detail:
+        'The backup file’s, and this vault’s. Nobody can swap in another vault without opening the one that is here.',
+    },
+    {
+      value: 'incoming',
+      label: 'The backup file’s passphrase only',
+      detail:
+        'Proves the file is one you can open. Does not stop someone restoring a vault of their own over yours.',
+    },
+    {
+      value: 'off',
+      label: 'Ask for nothing',
+      detail:
+        'Anyone at this computer with a backup file can replace the vault, locked screen or not.',
+    },
+  ]
+
+  return (
+    <Panel className="w-full space-y-3">
+      <h2 className="font-display text-lg text-dusk">Restoring a backup</h2>
+      <p className="text-sm text-dusk/80">
+        The lock screen offers to restore a backup file over the vault on this device — that is how
+        you recover on a new machine, and it is offered without unlocking because a vault you
+        cannot open is the case it exists for. What it asks for first is up to you.
+      </p>
+      <div className="space-y-2">
+        {OPTIONS.map((o) => (
+          <label key={o.value} className="flex cursor-pointer items-start gap-2 text-sm text-dusk">
+            <input
+              type="radio"
+              name="restore-gate"
+              checked={gate === o.value}
+              onChange={() => choose(o.value)}
+              className="mt-0.5 size-4 accent-amber-glow"
+            />
+            <span>
+              <span className="font-semibold">{o.label}</span>
+              <span className="block text-dusk/80">{o.detail}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      <p className="text-sm text-dusk/80">
+        The cost of the first setting is worth knowing before you rely on it: if you ever lose{' '}
+        <em>this</em> vault&apos;s passphrase, this browser will not let a backup replace it. The
+        way out then is to clear{' '}
+        {isExtensionContext() ? 'this extension’s data' : 'this site’s data in your browser'} —
+        which erases a vault nobody could have opened — and start again. One copy of a replaced
+        vault is kept aside either way, and only one.
+      </p>
+      {failed && (
+        <p className="text-sm font-semibold text-brick">
+          That setting could not be saved, so it is unchanged.
+        </p>
+      )}
     </Panel>
   )
 }

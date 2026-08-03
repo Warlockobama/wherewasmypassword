@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { parseBackup } from '../storage/backup.ts'
-import { restoreVault, type StoredVault } from '../storage/db.ts'
+import type { StoredVault } from '../storage/db.ts'
+import { NO_PROOFS, RestoreGateError, restoreVaultWithProof } from '../vault/restore.ts'
 import { Button, Panel, Progress, Screen, Title } from '../ui.tsx'
 
 const PAGES: { title: string; body: React.ReactNode }[] = [
@@ -76,15 +77,28 @@ export default function Welcome({
   const restore = async (file: File) => {
     try {
       const restored = parseBackup(await file.text())
-      // Archive unconditionally, exactly as the lock screen's restore does —
-      // one transaction, so nothing can land between setting aside and
-      // replacing. Nothing should reach this screen with a vault present, but
-      // "should" is not a reason for the one destructive path to be the
-      // unguarded one.
-      await restoreVault(restored)
+      // Nothing is proven here and nothing needs to be: this screen exists
+      // because the browser has no vault, and with nothing to displace the gate
+      // asks for nothing (`requiredProofs`). Asking anyway would put an
+      // Argon2id wait immediately in front of the unlock that derives the same
+      // key from the same words.
+      //
+      // It still goes through the gate rather than around it. Nothing *should*
+      // reach this screen with a vault present, but "should" is not a reason
+      // for the one destructive path to be the unguarded one — and the check
+      // happens inside the write transaction, against the record actually
+      // there, so a vault created in another tab a moment ago is not something
+      // this can quietly overwrite.
+      await restoreVaultWithProof(restored, NO_PROOFS)
       onRestored(restored)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(
+        err instanceof RestoreGateError
+          ? 'This browser already holds a vault. Restore from the lock screen instead — it asks for the passphrases first, and keeps the vault it replaces.'
+          : err instanceof Error
+            ? err.message
+            : String(err),
+      )
     }
   }
 

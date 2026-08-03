@@ -2,9 +2,25 @@ import { useEffect, useRef, useState } from 'react'
 import { deriveKey } from '../crypto/kdf.ts'
 import { decryptVault, fromBase64, WrongPassphraseError, type VaultData } from '../crypto/vault.ts'
 import { parseBackup } from '../storage/backup.ts'
-import { loadArchivedVault, restoreVault, type StoredVault } from '../storage/db.ts'
+import {
+  loadArchivedVault,
+  loadVaultSettings,
+  VaultSupersededError,
+  type StoredVault,
+} from '../storage/db.ts'
+import type { RestoreGate } from '../storage/settings.ts'
+import { isExtensionContext } from '../platform.ts'
 import { clearPopupSession } from '../popup/session.ts'
 import { upgradeNeeded, upgradeOnUnlock } from './seal.ts'
+import { provePassphrase } from './prove.ts'
+import {
+  awaitingProof,
+  NO_PROOFS,
+  requiredProofs,
+  RestoreGateError,
+  restoreVaultWithProof,
+  type RestoreProofs,
+} from './restore.ts'
 import { undoRestoreWithPassphrase } from './undo.ts'
 import { Button, Panel, Screen, Title } from '../ui.tsx'
 
@@ -23,6 +39,17 @@ export default function LockScreen({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pendingRestore, setPendingRestore] = useState<StoredVault | null>(null)
+  // What this device asks for before a backup may replace the vault
+  // (`decisions/0019`). Held only to decide what the confirmation panel shows —
+  // the gate that is *enforced* is read again at the commit, inside
+  // `restoreVaultWithProof`, so raising it in another tab applies immediately.
+  // Null until read; the strictest answer stands in until then.
+  const [gate, setGate] = useState<RestoreGate | null>(null)
+  // The passphrase field on the restore panel, and what it has proven so far.
+  const [restorePhrase, setRestorePhrase] = useState('')
+  const [restoreBusy, setRestoreBusy] = useState(false)
+  const [restoreError, setRestoreError] = useState<string | null>(null)
+  const [proofs, setProofs] = useState<RestoreProofs>(NO_PROOFS)
   // The vault a restore replaced, if one is still set aside. Its presence is
   // the whole condition for offering the undo (`decisions/0016`).
   const [archived, setArchived] = useState<StoredVault | null>(null)
@@ -44,16 +71,22 @@ export default function LockScreen({
     void loadArchivedVault()
       .then((v) => setArchived(v ?? null))
       .catch(() => setArchived(null))
+    // Falls to the strictest gate if it cannot be read, which is what
+    // `loadVaultSettings` already promises — the `catch` is belt and braces.
+    void loadVaultSettings()
+      .then((s) => setGate(s.restoreGate))
+      .catch(() => setGate('both'))
   }, [])
 
   /**
    * True while this screen is on the page.
    *
-   * The undo now costs an Argon2id derive, so it is a second wide, and an
-   * unlock started alongside it can finish first and take this screen away.
-   * The swap it was running still lands on disk, and calling `onRestored` from
-   * there would tell an app that is already *unlocked* that the live record is
-   * now a different vault — leaving it holding one vault's key beside another
+   * The undo costs an Argon2id derive, so it is a second wide, and since
+   * `decisions/0019` a restore costs one or two of them. An unlock started
+   * alongside either can finish first and take this screen away. The write it
+   * was running still lands on disk, and calling `onRestored` from there would
+   * tell an app that is already *unlocked* that the live record is now a
+   * different vault — leaving it holding one vault's key beside another
    * vault's header, which the next credential save would write out as a record
    * no passphrase can open. So the callback is not made after teardown: the
    * app keeps the record it unlocked, and its next save is refused by
@@ -69,10 +102,10 @@ export default function LockScreen({
   }, [])
 
   const unlock = async () => {
-    // Not while the undo is deriving: the two change the same vault from the
-    // same screen, and whichever lost the race would be acting on a record the
-    // other has already replaced.
-    if (!phrase.trim() || busy || undoBusy) return
+    // Not while the undo or a restore is deriving: all three change the same
+    // vault from the same screen, and whichever lost the race would be acting
+    // on a record another has already replaced.
+    if (!phrase.trim() || busy || undoBusy || restoreBusy) return
     setBusy(true)
     setError(null)
     try {
@@ -115,33 +148,138 @@ export default function LockScreen({
   const stageRestore = async (file: File) => {
     setError(null)
     try {
-      setPendingRestore(parseBackup(await file.text()))
+      const parsed = parseBackup(await file.text())
+      // A new file is a new question: nothing proven about the last one carries
+      // over, least of all a proof made against a different record.
+      setProofs(NO_PROOFS)
+      setRestorePhrase('')
+      setRestoreError(null)
+      setPendingRestore(parsed)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
   }
 
-  const confirmRestore = async () => {
+  /** Put the staged file down, taking any typed phrase and proof with it. */
+  const cancelRestore = () => {
+    setPendingRestore(null)
+    setProofs(NO_PROOFS)
+    setRestorePhrase('')
+    setRestoreError(null)
+  }
+
+  // What the gate wants, and what is still outstanding. There is always a live
+  // vault on this screen — it is what `stored` is — so a replacement is always
+  // what is being asked about. Until the preference has been read, the strictest
+  // answer applies, so the panel never offers a button the commit would refuse.
+  const required = requiredProofs(gate ?? 'both', true)
+  const awaiting = awaitingProof(required, proofs)
+
+  /**
+   * Write the restore, with whatever the gate asked for in hand.
+   *
+   * `restoreVaultWithProof` reads the preference again and checks it against
+   * the record it is actually displacing, inside the transaction — this side
+   * decides nothing, it only reports what came back.
+   */
+  const commitRestore = async (proven: RestoreProofs) => {
     if (!pendingRestore) return
     try {
       // Setting aside and replacing in one transaction, so an undo in another
       // tab cannot land between them and have its result overwritten — see
       // `restoreVault`.
-      await restoreVault(pendingRestore)
+      await restoreVaultWithProof(pendingRestore, proven)
       // Whatever a popup is holding belongs to the vault that was just replaced.
       // Its salt no longer matches, so it would be refused anyway; not leaving
       // it parked for five minutes is cheaper than reasoning about that.
-      await clearPopupSession()
+      await clearPopupSession().catch(() => {})
       // Read back rather than assuming `stored` is what was set aside: another
       // context may have saved or re-keyed the live vault since this screen
       // mounted, and the record the undo offers has to be the one on disk — it
       // is what the passphrase gate will be asked to match.
-      setArchived((await loadArchivedVault()) ?? null)
-      onRestored(pendingRestore)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
+      const nowAside = await loadArchivedVault().catch(() => undefined)
+      const restored = pendingRestore
       setPendingRestore(null)
+      setProofs(NO_PROOFS)
+      setRestorePhrase('')
+      setArchived(nowAside ?? null)
+      // Not after teardown: see `live`. A restore now takes as long as two
+      // derives, and an unlock that finished first has taken this screen away.
+      if (live.current) onRestored(restored)
+    } catch (err) {
+      // Both records are exactly where they were, whichever of these it was.
+      setProofs(NO_PROOFS)
+      setRestorePhrase('')
+      if (err instanceof RestoreGateError) {
+        // The gate was raised somewhere else after this panel was drawn — the
+        // commit reads the preference for itself, which is the whole point, and
+        // this screen is the one holding a stale copy. Pick the new one up so
+        // the panel asks for what is now wanted rather than repeating a button
+        // that will be refused again.
+        setGate((await loadVaultSettings().catch(() => ({ restoreGate: 'both' as const }))).restoreGate)
+        setRestoreError('This device now asks for more before a backup may replace the vault.')
+        return
+      }
+      setRestoreError(
+        err instanceof VaultSupersededError
+          ? 'The vault on this device was re-encrypted while you were typing, so nothing was replaced. Start again and it will ask for the new passphrase.'
+          : `Could not restore: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
+
+  /**
+   * Prove one of the phrases the gate asks for (`decisions/0019`).
+   *
+   * The backup's phrase is asked for first: if the file cannot be opened at all
+   * there is no point troubling anyone about the vault it would replace. When
+   * both are wanted, the phrase that opened the backup is tried against the
+   * live vault as well before asking again — restoring your own newer export is
+   * the ordinary case, and one phrase opens both there. The wasted derive when
+   * they differ costs a second on a path that already spends two, which is
+   * cheaper than making everyone type the same words twice.
+   */
+  const submitRestoreProof = async () => {
+    if (!pendingRestore || !awaiting || !restorePhrase.trim()) return
+    // Not alongside an unlock or an undo, for the reason none of the three run
+    // alongside each other: they act on the same two records.
+    if (restoreBusy || busy || undoBusy) return
+    setRestoreBusy(true)
+    setRestoreError(null)
+    try {
+      let next: RestoreProofs
+      if (awaiting === 'incoming') {
+        await provePassphrase(restorePhrase, pendingRestore)
+        let alsoLive: StoredVault | null = null
+        if (required.live) {
+          try {
+            await provePassphrase(restorePhrase, stored)
+            alsoLive = stored
+          } catch (err) {
+            // Only a wrong phrase means "ask for the other one". Anything else
+            // — key-derivation parameters this browser will not run, say — is a
+            // real failure of the live record and has to be seen, not swallowed.
+            if (!(err instanceof WrongPassphraseError)) throw err
+          }
+        }
+        next = { incoming: true, live: alsoLive }
+      } else {
+        await provePassphrase(restorePhrase, stored)
+        next = { ...proofs, live: stored }
+      }
+      setProofs(next)
+      setRestorePhrase('')
+      if (!awaitingProof(required, next)) await commitRestore(next)
+    } catch (err) {
+      setRestoreError(
+        err instanceof WrongPassphraseError
+          ? awaiting === 'incoming'
+            ? 'That doesn’t open the backup file. Nothing has been changed.'
+            : 'That doesn’t open the vault on this device. Nothing has been changed.'
+          : `Could not check that: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    } finally {
+      setRestoreBusy(false)
     }
   }
 
@@ -156,17 +294,17 @@ export default function LockScreen({
    * someone's keyboard is enough to change which vault their machine opens
    * (`decisions/0018`).
    *
-   * It is the vault-altering control on this screen that costs nothing but a
-   * press. Restoring is the other one, and it is not gated — it needs a backup
-   * file brought to the machine, which is a higher bar but not an authenticated
-   * one, and doing it twice overwrites the archive slot for good. Whether that
-   * one should be gated too is `decisions/0019`.
+   * It is the control on this screen that costs nothing but a press, and it was
+   * for one release the only one that asked for anything. Restoring is the
+   * other, and since `decisions/0019` it asks too — for the backup's phrase and
+   * for this device's, unless the owner has said otherwise from inside an
+   * unlocked vault.
    */
   const confirmUndo = async () => {
-    // Not while an unlock is deriving, for the reason `unlock` will not start
-    // while this one is: they are two slow operations on the same vault, and
-    // the loser acts on a record the winner has already replaced.
-    if (!archived || !undoPhrase.trim() || undoBusy || busy) return
+    // Not while an unlock or a restore is deriving, for the reason `unlock`
+    // will not start while this one is: they are slow operations on the same
+    // two records, and the loser acts on a record the winner has replaced.
+    if (!archived || !undoPhrase.trim() || undoBusy || busy || restoreBusy) return
     setUndoBusy(true)
     setUndoError(null)
     try {
@@ -257,7 +395,10 @@ export default function LockScreen({
             spellCheck={false}
             className="w-full rounded-lg border-2 border-dusk/40 bg-parchment px-3 py-2 text-center font-display text-lg tracking-wide focus:border-amber-glow focus:outline-none"
           />
-          <Button onClick={() => void unlock()} disabled={!phrase.trim() || busy || undoBusy}>
+          <Button
+            onClick={() => void unlock()}
+            disabled={!phrase.trim() || busy || undoBusy || restoreBusy}
+          >
             {busy ? 'Deriving key…' : 'Unlock'}
           </Button>
         </form>
@@ -281,14 +422,97 @@ export default function LockScreen({
             need the passphrase that belongs to that backup. The vault being replaced is kept
             aside — if this turns out to be the wrong file, this screen can put it back.
           </p>
-          <div className="flex flex-wrap gap-2">
-            <Button className="!border-brick !bg-brick" onClick={() => void confirmRestore()}>
-              Replace my vault
-            </Button>
-            <Button variant="secondary" onClick={() => setPendingRestore(null)}>
-              Keep the current vault
-            </Button>
-          </div>
+          {/* One slot, and a restore takes it. Said here rather than only in the
+              README, because this is the press that spends it: whatever is set
+              aside now stops being recoverable the moment this goes through
+              (`decisions/0016` chose the single slot; `0019` left it chosen). */}
+          {archived && (
+            <p>
+              Something is already set aside — the vault replaced on{' '}
+              <strong>{new Date(archived.updatedAt).toLocaleDateString()}</strong>. This device
+              keeps one, so that copy goes and the vault open now takes its place.
+            </p>
+          )}
+          {awaiting === 'incoming' && (
+            <p>
+              {required.live ? 'First, the' : 'The'} passphrase of <em>that backup file</em>.
+              Opening it is what tells this screen you are its owner, rather than someone who
+              found this machine locked with a file to hand.
+            </p>
+          )}
+          {awaiting === 'live' && (
+            <p>
+              That opens the backup. Now the passphrase of <em>the vault on this device</em> — the
+              one about to be pushed aside. This half is what says the vault being replaced is
+              yours to replace. If you no longer have it, this browser will not restore over that
+              vault: unlock it and change <strong>Restoring a backup</strong> there, or clear{' '}
+              {isExtensionContext() ? 'this extension’s data' : 'this site’s data'} to erase a
+              vault you could not open anyway.
+            </p>
+          )}
+          {awaiting ? (
+            <form
+              className="space-y-3"
+              onSubmit={(e) => {
+                e.preventDefault()
+                void submitRestoreProof()
+              }}
+            >
+              <input
+                autoFocus
+                type="password"
+                value={restorePhrase}
+                onChange={(e) => setRestorePhrase(e.target.value)}
+                placeholder={
+                  awaiting === 'incoming'
+                    ? 'the backup file’s passphrase…'
+                    : 'this device’s passphrase…'
+                }
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                className="w-full rounded-lg border-2 border-dusk/40 bg-parchment px-3 py-2 text-center font-display text-lg tracking-wide focus:border-amber-glow focus:outline-none"
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  className="!border-brick !bg-brick"
+                  onClick={() => void submitRestoreProof()}
+                  disabled={!restorePhrase.trim() || restoreBusy || busy || undoBusy}
+                >
+                  {restoreBusy ? 'Deriving key…' : 'Replace my vault'}
+                </Button>
+                <Button variant="secondary" onClick={cancelRestore} disabled={restoreBusy}>
+                  Keep the current vault
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                className="!border-brick !bg-brick"
+                // No derive on this path, so nothing else sets the flag — and
+                // without it a second click starts a second restore, which
+                // would push the vault this one just installed into the slot.
+                onClick={() => {
+                  setRestoreBusy(true)
+                  void commitRestore(proofs).finally(() => setRestoreBusy(false))
+                }}
+                disabled={restoreBusy || busy || undoBusy}
+              >
+                Replace my vault
+              </Button>
+              <Button variant="secondary" onClick={cancelRestore} disabled={restoreBusy}>
+                Keep the current vault
+              </Button>
+            </div>
+          )}
+          {restoreBusy && (
+            <div className="flex items-center justify-center gap-2">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-dusk/20 border-t-amber-glow" />
+              <span className="text-dusk/70">Stretching passphrase (Argon2id)…</span>
+            </div>
+          )}
+          {restoreError && <p className="font-semibold text-brick">{restoreError}</p>}
         </Panel>
       ) : (
         <button

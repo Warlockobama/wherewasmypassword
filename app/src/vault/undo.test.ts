@@ -12,13 +12,14 @@ import type { StoredVault } from '../storage/db.ts'
 
 /**
  * The undo offer is the vault-altering control on a locked device that costs
- * nothing but a press — restoring is the other one, ungated, and `decisions/0019`
- * asks whether it should stay that way. `decisions/0018` put the archived
- * vault's own passphrase in front of this one. What
- * is worth pinning is the negative: a phrase that does not open the vault being
- * put back leaves *both* records exactly where they were — including the phrase
- * of the vault that is live, which is the one an attacker at a locked machine
- * is least likely to have and a curious housemate most likely to.
+ * nothing but a press — restoring is the other one, and it was ungated until
+ * `decisions/0019` put a gate of its own in front of it (`restore.test.ts`).
+ * `decisions/0018` put the archived vault's own passphrase in front of this
+ * one. What is worth pinning is the negative: a phrase that does not open the
+ * vault being put back leaves *both* records exactly where they were —
+ * including the phrase of the vault that is live, which is the one an attacker
+ * at a locked machine is least likely to have and a curious housemate most
+ * likely to.
  *
  * Real Argon2id and real AES-GCM, on deliberately cheap KDF settings: the gate
  * is a decryption, so a stubbed one would test nothing.
@@ -107,7 +108,10 @@ beforeEach(async () => {
   theirs = await sealed(THEIRS, 'theirs', t0 + 1000)
   // What a restore leaves behind: the outgoing vault set aside, the new one live.
   await saveVault(mine)
-  await restoreVault(theirs)
+  // The gate that now stands in front of a restore is `vault/restore.ts`'s, and
+  // it is tested there; this is the storage call underneath, which takes the
+  // authorisation as a hook so that no caller can reach it without one.
+  await restoreVault(theirs, () => {})
 })
 
 describe('putting the previous vault back', () => {

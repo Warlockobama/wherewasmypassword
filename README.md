@@ -119,14 +119,23 @@ you can't hide something in a drawer and open it later. The illustrated house ca
   until it opens it — otherwise a moment at your keyboard would be enough to change which
   vault your machine opens (`decisions/0018`).
 
-- **Restoring a backup is still not gated, and a locked screen offers it.** The undo above
-  now asks for a passphrase; restore does not, because it never has been able to — a
-  backup file's phrase is not something this device knows. It is a higher bar than a
-  single press (someone has to bring a file) but not an authenticated one, and there is
-  one slot for the vault set aside: restoring twice overwrites it, and the vault this
-  device started with is gone from disk with no other copy. Keep your own export
-  somewhere else; the open question of whether this screen should ask for something
-  first is `decisions/0019`.
+- **Restoring a backup asks for two passphrases, and you choose how many.** The lock
+  screen offers to restore a backup file over the vault on this device — it has to, since
+  the case it exists for is a vault you can no longer open. It used to ask for nothing at
+  all, which made the sentence above about the undo being the only gated control on that
+  screen an overclaim, and let the same press twice consume the one archive slot without
+  a passphrase being typed at any point. It now asks for the **backup file's** passphrase
+  (the file is one you can open, not one you merely carried in) and then for **this
+  device's** (the vault being pushed aside is yours to push). One phrase that opens both
+  is typed once. **Restoring a backup** under Housekeeping in the unlocked app lowers that
+  to the file's phrase alone, or to nothing — and only from there, because a switch that
+  turned the gate off from the lock screen would *be* the gate (`decisions/0019`).
+  Two things this does not change. There is still one slot for the vault set aside, so a
+  second restore spends it — the difference is that spending it now means opening the
+  vault the first restore installed. And with the default setting and no memory of this
+  device's phrase, this browser will not restore over that vault at all: the way out is
+  to clear the extension's data, erasing a vault nobody could have opened. Keep your own
+  export somewhere else.
 
 **Known limitation:** Copy remains the fallback for pages autofill cannot reach, and is
 only offered in the full tab. It clears the clipboard 30 seconds after you return to that

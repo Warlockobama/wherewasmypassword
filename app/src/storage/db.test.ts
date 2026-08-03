@@ -50,10 +50,23 @@ const {
   loadArchivedVault,
   loadPracticeMeta,
   loadVault,
+  loadVaultSettings,
   savePracticeMeta,
   saveVault,
+  saveVaultSettings,
   undoRestore,
 } = await import('./db.ts')
+
+/**
+ * `restoreVault`'s authorisation hook, satisfied.
+ *
+ * The hook exists so that no caller can reach the write without saying
+ * something about it (`decisions/0019`); what it is actually asked in the app
+ * is the restore gate, tested against real Argon2id in `vault/restore.test.ts`.
+ * These tests are about the archive machinery underneath, so they say yes and
+ * get out of the way — except where the refusal itself is the subject.
+ */
+const allowed = () => {}
 
 const t0 = 1700000000000
 const DAY = 24 * 60 * 60 * 1000
@@ -131,7 +144,7 @@ describe('undoing a restore', () => {
     // passphrase had just been proven.
     await saveVault(mine)
 
-    await restoreVault(theirs)
+    await restoreVault(theirs, allowed)
 
     expect(await loadVault()).toEqual(theirs)
     expect(await loadArchivedVault()).toEqual(mine)
@@ -139,7 +152,7 @@ describe('undoing a restore', () => {
 
   it('puts back the vault the restore replaced', async () => {
     await saveVault(mine)
-    await restoreVault(theirs)
+    await restoreVault(theirs, allowed)
     expect(await loadVault()).toEqual(theirs)
 
     expect(await undoRestore(mine)).toEqual(mine)
@@ -153,7 +166,7 @@ describe('undoing a restore', () => {
     // them: the same unrecoverable loss this exists to remove, pointed the
     // other way.
     await saveVault(mine)
-    await restoreVault(theirs)
+    await restoreVault(theirs, allowed)
 
     await undoRestore(mine)
     expect(await loadVault()).toEqual(mine)
@@ -171,7 +184,7 @@ describe('undoing a restore', () => {
     // second replaces what is set aside; the swap must then do nothing rather
     // than put back a vault whose phrase nobody just typed.
     await saveVault(mine)
-    await restoreVault(theirs)
+    await restoreVault(theirs, allowed)
 
     // A different vault entirely, and — separately — the same vault's salt on
     // somebody else's ciphertext, since salt alone is not what identifies a
@@ -191,7 +204,7 @@ describe('undoing a restore', () => {
     // sane parameters it holds in memory, succeeds, and the swap would install
     // a live vault that no passphrase can open.
     await saveVault(mine)
-    await restoreVault(theirs)
+    await restoreVault(theirs, allowed)
     const tampered = { ...mine, kdfParams: { ...mine.kdfParams, memoryKiB: 2 * 1024 * 1024 } }
     store.get('vault')!.set('previous', tampered)
 
@@ -224,7 +237,7 @@ describe('undoing a restore', () => {
     // would put a whole encrypted vault — and a lock screen offering to open
     // it — in front of someone who just erased everything.
     await saveVault(mine)
-    await restoreVault(theirs)
+    await restoreVault(theirs, allowed)
     await savePracticeMeta({ createdAt: t0, practiceCount: 3, lastPracticedAt: t0 + DAY })
 
     await deleteVault()
@@ -234,16 +247,144 @@ describe('undoing a restore', () => {
     expect(await loadPracticeMeta()).toBeUndefined()
   })
 
+  it('writes nothing when the restore is not authorised', async () => {
+    // The hook runs inside the transaction and before either write, so a
+    // refusal has to leave both slots untouched — not "leave the archive
+    // written and the vault not", which is the half-restore that would destroy
+    // a vault while refusing to replace it.
+    await saveVault(mine)
+
+    await expect(
+      restoreVault(theirs, () => {
+        throw new Error('not authorised')
+      }),
+    ).rejects.toThrow('not authorised')
+
+    expect(await loadVault()).toEqual(mine)
+    expect(await loadArchivedVault()).toBeUndefined()
+  })
+
+  it('refuses a hook that answers asynchronously, rather than trusting it', async () => {
+    // `authorize` is typed to return nothing, and TypeScript accepts an `async`
+    // function anyway — a promise is assignable to a `void` return. Held that
+    // way, a refusal becomes a rejected promise nobody awaits: it surfaces as an
+    // unhandled error somewhere else and the writes go ahead as though the
+    // restore had been approved. The one safe reading of "I cannot tell whether
+    // this was authorised" is no.
+    //
+    // The hook here resolves rather than rejects, only so that the test does
+    // not leave an orphaned rejection of its own behind. What is being pinned
+    // is that an `async` hook is refused *at all* — the shape is what makes the
+    // refusal unreachable, not the particular answer it would have given.
+    await saveVault(mine)
+    const asAsync = async () => {}
+
+    await expect(
+      restoreVault(theirs, asAsync as unknown as (live: StoredVault | undefined) => void),
+    ).rejects.toBeInstanceOf(TypeError)
+
+    expect(await loadVault()).toEqual(mine)
+    expect(await loadArchivedVault()).toBeUndefined()
+  })
+
+  it('shows the hook the record it is about to displace', async () => {
+    // What the gate has to judge is the vault actually being replaced, not the
+    // one the caller read a second ago — that is the whole reason this is a
+    // callback rather than a value compared beforehand.
+    await saveVault(mine)
+    const seen: (StoredVault | undefined)[] = []
+
+    await restoreVault(theirs, (live) => {
+      seen.push(live)
+    })
+    await restoreVault(mine, (live) => {
+      seen.push(live)
+    })
+
+    expect(seen).toEqual([mine, theirs])
+  })
+
+  it('tells the hook when there is no vault to replace', async () => {
+    // A first-run restore displaces nobody, and the gate leans on being able to
+    // see that: it is what lets the welcome screen restore without an Argon2id
+    // wait in front of the unlock that follows it.
+    let seen: StoredVault | undefined | 'never called' = 'never called'
+
+    await restoreVault(theirs, (live) => {
+      seen = live
+    })
+
+    expect(seen).toBeUndefined()
+    expect(await loadVault()).toEqual(theirs)
+    expect(await loadArchivedVault()).toBeUndefined()
+  })
+
   it('keeps only the most recently replaced vault', async () => {
     // Two restores in a row: the first vault is gone for good. That is the
     // retention the ruling asked for — one slot, overwritten by the next
     // restore — and the reason the undo is offered on the lock screen where a
     // wrong restore is noticed, rather than saved up for later.
+    //
+    // `decisions/0019` looked at this again and left it: what it changed is who
+    // can spend the slot. The second restore here is authorised, and under the
+    // default gate authorising it means opening the vault the first restore
+    // installed. What used to be free is not.
     const third = vaultRecord('salt-third', t0 + 2 * DAY)
     await saveVault(mine)
-    await restoreVault(theirs)
-    await restoreVault(third)
+    await restoreVault(theirs, allowed)
+    await restoreVault(third, allowed)
 
     expect(await undoRestore(theirs)).toEqual(theirs)
+  })
+})
+
+/**
+ * The preferences that have to be readable with the vault locked
+ * (`decisions/0019`). What is worth pinning is where they fail *to*: a security
+ * gate whose stored value could be turned off by scribbling on the record would
+ * be cheaper to defeat than the thing it guards.
+ */
+describe('device settings', () => {
+  it('answers with the strictest gate when nothing has been stored', async () => {
+    expect(await loadVaultSettings()).toEqual({ restoreGate: 'both' })
+  })
+
+  it('round-trips a gate the user chose', async () => {
+    await saveVaultSettings({ restoreGate: 'off' })
+
+    expect(await loadVaultSettings()).toEqual({ restoreGate: 'off' })
+  })
+
+  it('falls back to the strictest gate for a record it does not recognise', async () => {
+    for (const rubbish of [null, 7, 'off', {}, { restoreGate: 'nonsense' }, { restoreGate: null }]) {
+      store.set('meta', new Map([['settings', rubbish]]))
+
+      expect(await loadVaultSettings()).toEqual({ restoreGate: 'both' })
+    }
+  })
+
+  it('keeps the practice schedule and the settings apart in the one store', async () => {
+    await savePracticeMeta({ createdAt: t0, practiceCount: 3, lastPracticedAt: t0 + DAY })
+    await saveVaultSettings({ restoreGate: 'incoming' })
+
+    expect(await loadPracticeMeta()).toEqual({
+      createdAt: t0,
+      practiceCount: 3,
+      lastPracticedAt: t0 + DAY,
+    })
+    expect(await loadVaultSettings()).toEqual({ restoreGate: 'incoming' })
+  })
+
+  it('survives deleting the vault', async () => {
+    // "Delete vault & start over" is about a vault. Clearing this with it would
+    // silently put a gate back that the user had turned off, on the very screen
+    // they would next meet — and there is no vault left for it to protect.
+    await saveVaultSettings({ restoreGate: 'off' })
+    await saveVault(vaultRecord('salt-mine', t0))
+
+    await deleteVault()
+
+    expect(await loadVault()).toBeUndefined()
+    expect(await loadVaultSettings()).toEqual({ restoreGate: 'off' })
   })
 })

@@ -160,6 +160,12 @@ overwrites the archive slot for good. That needs a ruling rather than a patch,
 so it is `0019`, and the README says plainly meanwhile that restore is
 ungated.
 
+*(Resolved 2026-08-03. `0019` was ruled "both, with an option to configure that
+behavior": a restore now proves the incoming backup's passphrase and the live
+vault's before it replaces anything, unless the owner lowers the gate from
+inside an unlocked vault. The two gates share `vault/prove.ts`, and the README
+paragraph that said restore was ungated has been rewritten.)*
+
 Two test gaps came with them. The `db.test.ts` fixture hardcoded one IV and one
 ciphertext for every record and varied only the salt, so `sameRecord` could have
 been mutated down to comparing salts alone with every test still green — the
