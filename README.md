@@ -41,8 +41,8 @@ you can't hide something in a drawer and open it later. The illustrated house ca
   size does not track what is inside, and the header (salt, KDF parameters, format
   version) is bound into the ciphertext as additional data. Encrypted backup
   export/import — a restore sets the vault it replaces aside, and the lock screen will
-  put it back if you restored the wrong file. Spaced practice reminders at 1, 2, 4, 7,
-  14, 30 days — unlocking *is* the rehearsal.
+  put it back if you restored the wrong file and can type that vault's passphrase.
+  Spaced practice reminders at 1, 2, 4, 7, 14, 30 days — unlocking *is* the rehearsal.
 - **Changing the master phrase**: generates a new one, walks you through placing it, and
   re-encrypts the vault under it with your passwords untouched. Vaults created under
   weaker key-derivation settings are re-keyed to the current ones automatically, the
@@ -114,7 +114,11 @@ you can't hide something in a drawer and open it later. The illustrated house ca
   timestamp — needs somewhere to keep state that the same attacker cannot also roll
   back, and inside a browser profile there is no such place. So rather than a scheme
   that cannot be anchored, the unlocked screen shows when the vault was last changed: a
-  date you do not recognise is the signal (`decisions/0016`).
+  date you do not recognise is the signal (`decisions/0016`). The lock screen's offer to
+  put the previous vault back asks for *that* vault's passphrase first and swaps nothing
+  until it opens it — it is the only vault-altering control on a locked device, and
+  otherwise a moment at your keyboard would be enough to change which vault your machine
+  opens (`decisions/0018`).
 
 **Known limitation:** Copy remains the fallback for pages autofill cannot reach, and is
 only offered in the full tab. It clears the clipboard 30 seconds after you return to that

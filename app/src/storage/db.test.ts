@@ -148,6 +148,21 @@ describe('undoing a restore', () => {
     expect(await loadArchivedVault()).toEqual(mine)
   })
 
+  it('refuses to swap in a record other than the one the caller proved', async () => {
+    // The caller is the passphrase gate (`decisions/0018`), and its Argon2id
+    // derive is a second wide. A restore in another copy of the UI inside that
+    // second replaces what is set aside; the swap must then do nothing rather
+    // than put back a vault whose phrase nobody just typed.
+    await saveVault(mine)
+    await archiveCurrentVault()
+    await saveVault(theirs)
+
+    expect(await undoRestore(vaultRecord('a-different-vault', t0))).toBeUndefined()
+
+    expect(await loadVault()).toEqual(theirs)
+    expect(await loadArchivedVault()).toEqual(mine)
+  })
+
   it('never leaves the archive pointing at the vault that is now live', async () => {
     // An archive with no live record beside it is not a state the app can
     // reach today, which is exactly why it is worth pinning: swapping in an

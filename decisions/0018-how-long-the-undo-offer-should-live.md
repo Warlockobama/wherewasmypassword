@@ -1,8 +1,6 @@
 # 0018 — How long the undo-restore offer lives, and who may press it
 
-**Status:** OPEN — recommended default below. Nothing is blocked: the offer
-shipped as `0016` ruled, and the swap it performs cannot destroy a vault, so
-this is about tightening a nuisance rather than closing a hole.
+**Status:** RESOLVED (user call, 2026-08-03) — see the resolution at the bottom.
 
 ## What is already true
 
@@ -54,3 +52,56 @@ unattended locked machine does and does not protect.
 
 A pick from the four. The passphrase gate is an afternoon including a test that
 a wrong phrase leaves both records where they were; leaving it is a paragraph.
+
+## RESOLUTION (user call, 2026-08-03 — via exec assistant)
+
+1. **Require passphrase to use undo-restore**: James said "go with the passphrase". The undo-restore swap must prompt for the archived vault’s passphrase and only proceed when it validates; a wrong passphrase leaves both vault records unchanged.
+2. **Keep a light fallback as a possible future option**: James said "maybe make it a toggleable option". If implemented later, a setting can allow leaving the behavior as-is, but the default must be passphrase-gated for security.
+
+## Implemented (2026-08-03)
+
+The confirmation panel now carries a passphrase field, and the swap happens only
+after the phrase has opened the archived record: derive against *that* record's
+own salt and parameters, decrypt, and let GCM's authentication tag answer, which
+is the same proof the unlock form uses and the only one this design has. A
+phrase that does not open it leaves both records where they were. The derived
+key is zeroed either way, before the swap — this proves a phrase, it does not
+open a vault.
+
+The gate is a function (`src/vault/undo.ts`) rather than a handler, because the
+property worth testing is the negative and a React handler is not reachable from
+this suite. Six tests: the swap on the right phrase, both records untouched on a
+wrong one, the live vault's own phrase *not* opening the one set aside (that
+phrase is the one whoever performed the restore does have), an archived record
+carrying key-derivation settings we refuse to run stopping before the swap,
+nothing changing if another context took the archive first, and the one below.
+
+**One hole found while building it.** Proving a phrase and performing the swap
+are a whole Argon2id derive apart — about a second — and a restore in another
+copy of the UI replaces what is set aside inside that second. The first cut
+authenticated the record the screen was showing and then put back whatever was
+in the archive slot by the time it got there, which is the gate answering a
+different question than it asks. `undoRestore` now takes the record the caller
+proved and compares it inside the transaction that does the swap, in the same
+shape `saveVault` already used for a vault re-keyed underneath a stale context;
+a slot that changed yields "nothing was set aside after all", which the lock
+screen already handles.
+
+Two things worth James knowing:
+
+1. **The phrase is typed twice on a real recovery** — once to authorise the
+   swap, once to unlock the vault it put back. The key from the first derive is
+   deliberately thrown away rather than used to open the vault: unlocking also
+   upgrades old key-derivation settings, which rewrites the record, and quietly
+   rewriting a vault at the moment it is swapped back is not something a
+   confirmation dialog should do. If the second Argon2id wait reads as friction
+   on a recovery path, unlocking straight through is a small change.
+2. **The toggle in ruling 2 is not built.** The ruling made it conditional
+   ("if implemented later"), and the default it specifies is what now ships. It
+   would be a preference beside the five-minute session switch; worth doing only
+   if the gate turns out to be in someone's way.
+
+**Gates:** `npm test` 170 passed, seven of them new here (six in `undo.test.ts`,
+one in `db.test.ts` for the record-identity check; the rest of the rise since
+`0016` is `0017`'s). `npm run build` clean, `npm run visual` green,
+`npm run autofill` 42/42.

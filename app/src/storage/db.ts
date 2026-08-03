@@ -137,12 +137,27 @@ export async function loadArchivedVault(): Promise<StoredVault | undefined> {
  *
  * Both halves happen in one transaction, so there is no instant where either
  * record is missing — a crash in the middle of *that* would lose one of them.
+ *
+ * This is the storage half only. Nothing in the UI may call it directly: the
+ * swap is offered on a locked device, so it goes through
+ * `vault/undo.ts`, which proves the archived vault's passphrase first
+ * (`decisions/0018`).
  */
-export async function undoRestore(): Promise<StoredVault | undefined> {
+export async function undoRestore(
+  /**
+   * The record the caller proved the passphrase of. The swap is refused if the
+   * archive slot no longer holds it — a restore in another copy of the UI
+   * replaces the slot, and the Argon2id derive in front of this is a second
+   * wide. Authorising one vault and putting back a different one is exactly
+   * what the gate in `vault/undo.ts` exists to prevent, so the check
+   * belongs inside the transaction that does the swap.
+   */
+  expecting?: StoredVault,
+): Promise<StoredVault | undefined> {
   const database = await db()
   const tx = database.transaction('vault', 'readwrite')
   const archived = await tx.store.get(PREVIOUS_VAULT_KEY)
-  if (!archived) {
+  if (!archived || (expecting && !sameRecord(archived, expecting))) {
     await tx.done
     return undefined
   }
@@ -155,6 +170,15 @@ export async function undoRestore(): Promise<StoredVault | undefined> {
   else await tx.store.delete(PREVIOUS_VAULT_KEY)
   await tx.done
   return archived
+}
+
+/**
+ * Whether two records are the same vault record. The IV is fresh random bytes
+ * on every write, so ciphertext and IV together identify one write of one
+ * vault; the salt is compared as well so a re-key can never look like a match.
+ */
+function sameRecord(a: StoredVault, b: StoredVault): boolean {
+  return a.salt === b.salt && a.iv === b.iv && a.ciphertext === b.ciphertext
 }
 
 /**

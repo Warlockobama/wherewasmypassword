@@ -6,11 +6,11 @@ import {
   archiveCurrentVault,
   loadArchivedVault,
   saveVault,
-  undoRestore,
   type StoredVault,
 } from '../storage/db.ts'
 import { clearPopupSession } from '../popup/session.ts'
 import { upgradeNeeded, upgradeOnUnlock } from './seal.ts'
+import { undoRestoreWithPassphrase } from './undo.ts'
 import { Button, Panel, Screen, Title } from '../ui.tsx'
 
 export default function LockScreen({
@@ -32,6 +32,12 @@ export default function LockScreen({
   // the whole condition for offering the undo (`decisions/0016`).
   const [archived, setArchived] = useState<StoredVault | null>(null)
   const [confirmingUndo, setConfirmingUndo] = useState(false)
+  // The undo is gated on the archived vault's own passphrase (`decisions/0018`),
+  // so it carries its own field, its own wait and its own error — all three
+  // belong beside the button being pressed rather than up at the unlock form.
+  const [undoPhrase, setUndoPhrase] = useState('')
+  const [undoBusy, setUndoBusy] = useState(false)
+  const [undoError, setUndoError] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   // Shown while the vault is being brought forward, because on an old vault
@@ -110,16 +116,24 @@ export default function LockScreen({
   }
 
   /**
-   * Put back the vault this device had before the restore.
+   * Put back the vault this device had before the restore, for whoever can
+   * prove they know its passphrase.
    *
-   * One confirmation rather than a hair trigger, but the operation underneath
-   * is a swap, not a replacement: whatever is live now goes into the slot the
-   * archive just left, so pressing this by mistake costs a second press rather
-   * than a vault. See `undoRestore`.
+   * The operation underneath is a swap, not a replacement: whatever is live now
+   * goes into the slot the archive just left, so a press costs a second press
+   * rather than a vault. What the phrase buys is not safety from loss — that is
+   * `undoRestore`'s job — but the answer to *who*: this is the only vault-
+   * altering control reachable on a locked device, and without the gate a
+   * moment at someone's keyboard is enough to change which vault their machine
+   * opens (`decisions/0018`).
    */
   const confirmUndo = async () => {
+    if (!archived || !undoPhrase.trim() || undoBusy) return
+    setUndoBusy(true)
+    setUndoError(null)
     try {
-      const back = await undoRestore()
+      const back = await undoRestoreWithPassphrase(undoPhrase, archived)
+      setUndoPhrase('')
       setConfirmingUndo(false)
       if (!back) {
         // Nothing was set aside after all — another context consumed it.
@@ -132,8 +146,21 @@ export default function LockScreen({
       await clearPopupSession()
       onRestored(back)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setUndoError(
+        err instanceof WrongPassphraseError
+          ? 'That doesn’t open the vault set aside. Nothing has been changed.'
+          : `Could not put it back: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    } finally {
+      setUndoBusy(false)
     }
+  }
+
+  /** Leave the undo alone, taking the typed phrase with it. */
+  const cancelUndo = () => {
+    setConfirmingUndo(false)
+    setUndoPhrase('')
+    setUndoError(null)
   }
 
   return (
@@ -229,18 +256,53 @@ export default function LockScreen({
             This device keeps one vault aside, and this swaps it with the one in use. The vault
             set aside — last changed{' '}
             <strong>{new Date(archived.updatedAt).toLocaleString()}</strong> — becomes the vault
-            this device opens, and it wants the passphrase <em>that</em> vault used. The one open
-            now, last changed <strong>{new Date(stored.updatedAt).toLocaleString()}</strong>, takes
-            its place aside. Nothing is thrown away: if this is the wrong way round, swap back.
+            this device opens. The one open now, last changed{' '}
+            <strong>{new Date(stored.updatedAt).toLocaleString()}</strong>, takes its place aside.
+            Nothing is thrown away: if this is the wrong way round, swap back.
           </p>
-          <div className="flex flex-wrap gap-2">
-            <Button className="!border-brick !bg-brick" onClick={() => void confirmUndo()}>
-              Put the previous vault back
-            </Button>
-            <Button variant="secondary" onClick={() => setConfirmingUndo(false)}>
-              Keep the restored one
-            </Button>
-          </div>
+          <p>
+            Type the passphrase <em>that</em> vault used. It is the only way this screen can tell
+            you from someone who happened to find your machine locked, and it is the phrase you
+            will need to open it in a moment anyway.
+          </p>
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void confirmUndo()
+            }}
+          >
+            <input
+              autoFocus
+              type="password"
+              value={undoPhrase}
+              onChange={(e) => setUndoPhrase(e.target.value)}
+              placeholder="the passphrase of the vault set aside…"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              className="w-full rounded-lg border-2 border-dusk/40 bg-parchment px-3 py-2 text-center font-display text-lg tracking-wide focus:border-amber-glow focus:outline-none"
+            />
+            <div className="flex flex-wrap gap-2">
+              <Button
+                className="!border-brick !bg-brick"
+                onClick={() => void confirmUndo()}
+                disabled={!undoPhrase.trim() || undoBusy}
+              >
+                {undoBusy ? 'Deriving key…' : 'Put the previous vault back'}
+              </Button>
+              <Button variant="secondary" onClick={cancelUndo} disabled={undoBusy}>
+                Keep the restored one
+              </Button>
+            </div>
+          </form>
+          {undoBusy && (
+            <div className="flex items-center justify-center gap-2">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-dusk/20 border-t-amber-glow" />
+              <span className="text-dusk/70">Stretching passphrase (Argon2id)…</span>
+            </div>
+          )}
+          {undoError && <p className="font-semibold text-brick">{undoError}</p>}
         </Panel>
       )}
       <input
