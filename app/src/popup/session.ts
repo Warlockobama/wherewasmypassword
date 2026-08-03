@@ -74,9 +74,14 @@ const DEADLINE_ALARM = 'popup-session-deadline'
  * Parking a key is not one operation: it reads the preference, then writes.
  * A "Lock" landing between those two would be undone by the write that follows
  * it, and the next popup would open unlocked after the user explicitly locked.
- * The counter is what lets the write notice that it was overtaken. Both live in
- * the same popup, so a module-level counter is the whole of the coordination
- * needed.
+ * The counter is what lets the write notice that it was overtaken.
+ *
+ * It reaches as far as one document and no further. The memory house is a
+ * separate page with its own copy of this module and its own counter, so a
+ * "Lock now" there, landing inside a park here, is not seen — the two are
+ * ordinary racing writers of one storage area, and the last one wins. That is
+ * why the park arms its alarm on both sides of the write and why resuming
+ * arms it again: whatever the interleaving leaves parked has a deadline.
  */
 let clearGeneration = 0
 
@@ -142,11 +147,23 @@ async function armDeadlineAlarm(expiresAt: number): Promise<void> {
   const alarms = alarmsApi()
   if (!alarms) return
   try {
-    await alarms.create(DEADLINE_ALARM, { when: expiresAt })
+    // Not kept across a browser restart, where the browser understands that:
+    // the storage area this alarm exists to sweep is emptied when the browser
+    // closes, so a surviving alarm can only wake the worker to find nothing —
+    // and Chrome keeps a persisted alarm on disk, which would leave a note of
+    // the minute a vault was unlocked in a profile that otherwise writes down
+    // nothing about when it is used.
+    await alarms.create(DEADLINE_ALARM, { when: expiresAt, persistAcrossSessions: false })
   } catch {
-    // A browser that will not take the alarm still has the worker's sweep and
-    // the browser-close wipe; failing to park the key over this would trade a
-    // narrowed window for a feature the user asked for.
+    try {
+      // Older browsers reject an alarm description carrying a property they do
+      // not know, and a persisted alarm is much better than no wake-up at all.
+      await alarms.create(DEADLINE_ALARM, { when: expiresAt })
+    } catch {
+      // A browser that will not take the alarm still has the worker's sweep and
+      // the browser-close wipe; failing to park the key over this would trade a
+      // narrowed window for a feature the user asked for.
+    }
   }
 }
 
@@ -234,12 +251,24 @@ export async function startPopupSession(
   // A lock that landed while the preference was being read has already had its
   // say. Writing now would quietly undo it.
   if (generation !== clearGeneration) return
-  await store.set({ [SESSION_ITEM]: { key, salt, expiresAt } })
-  // After the record, never before it: an alarm that fires with nothing parked
-  // is a no-op, where a record parked with no alarm is the gap `0017` closed.
+  // Armed either side of the write, and before it above all. A popup is
+  // destroyed the instant it loses focus, and this call is not awaited by
+  // anything (`Popup.tsx`), so it can be cut off between any two lines here.
+  // Of the two halves, an alarm with no record only ever wakes the worker to
+  // find nothing, where a record with no alarm is exactly the gap `0017`
+  // closed — so the alarm goes first and the record cannot outlive it.
   await armDeadlineAlarm(expiresAt)
+  await store.set({ [SESSION_ITEM]: { key, salt, expiresAt } })
   // And once more after the write, since the same race runs across it.
-  if (generation !== clearGeneration) await clearPopupSession()
+  if (generation !== clearGeneration) {
+    await clearPopupSession()
+    return
+  }
+  // The second arming is not redundant: the counter above only sees locks in
+  // *this* document, and the memory house has its own copy of this module with
+  // its own counter. A "Lock now" there, landing across this park, cancels the
+  // alarm armed above; this puts it back for the record that is now on disk.
+  await armDeadlineAlarm(expiresAt)
 }
 
 /**
@@ -302,6 +331,12 @@ export async function resumePopupSession(stored: StoredVault): Promise<PopupSess
     await clearPopupSession()
     return null
   }
+  // Opening the popup is the one moment this code gets to repair a session
+  // whose wake-up went missing — a lock in the memory house landing across a
+  // park can cancel an alarm this document's counter never saw. Arming again
+  // for the deadline the record already carries costs one call and cannot
+  // extend anything: the deadline is read from the record, never recomputed.
+  await armDeadlineAlarm(record.expiresAt)
   return { rawKey, expiresAt: record.expiresAt }
 }
 

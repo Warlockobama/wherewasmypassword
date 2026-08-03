@@ -29,6 +29,10 @@ let session: Map<string, unknown>
 let alarms: Map<string, number>
 /** The listener the worker registers for the deadline, so a test can fire it. */
 let onAlarm: ((alarm: { name: string }) => void) | null
+/** Its message listener — the autofill relay, which must survive everything. */
+let onMessage: unknown
+/** The description of the last alarm asked for, flags and all. */
+let lastAlarmInfo: { when: number; persistAcrossSessions?: boolean } | null
 
 /** A key parked in the shape `session.ts` writes. Only the deadline matters here. */
 function parked(expiresAt: number) {
@@ -40,7 +44,11 @@ function browser() {
     runtime: {
       id: 'test-extension',
       getURL: (path: string) => `chrome-extension://test-extension/${path}`,
-      onMessage: { addListener: () => {} },
+      onMessage: {
+        addListener: (fn: unknown) => {
+          onMessage = fn
+        },
+      },
     },
     storage: {
       session: {
@@ -54,7 +62,8 @@ function browser() {
     alarms: {
       get: async (name: string) =>
         alarms.has(name) ? { name, scheduledTime: alarms.get(name) } : undefined,
-      create: async (name: string, info: { when: number }) => {
+      create: async (name: string, info: { when: number; persistAcrossSessions?: boolean }) => {
+        lastAlarmInfo = info
         alarms.set(name, info.when)
       },
       clear: async (name: string) => alarms.delete(name),
@@ -68,9 +77,18 @@ function browser() {
 }
 
 /** Start the worker, as the browser does on a message, a wake, or an alarm. */
-function startWorker() {
+function startWorker(chrome: unknown = browser()) {
   onAlarm = null
-  new Function('chrome', SOURCE)(browser())
+  new Function('chrome', SOURCE)(chrome)
+}
+
+/**
+ * Deliver the alarm, the way the browser does: a one-shot is consumed as it
+ * fires, so the handler starts with nothing armed.
+ */
+function fireAlarm(name = ALARM) {
+  alarms.delete(name)
+  onAlarm?.({ name })
 }
 
 /** Let the worker's storage round-trips finish. */
@@ -80,6 +98,8 @@ beforeEach(() => {
   session = new Map()
   alarms = new Map()
   onAlarm = null
+  onMessage = null
+  lastAlarmInfo = null
 })
 
 describe('the extension worker and the parked key', () => {
@@ -94,12 +114,19 @@ describe('the extension worker and the parked key', () => {
   })
 
   it('deletes the key when the deadline alarm fires', async () => {
-    session.set(ITEM, parked(Date.now() - 1))
-    alarms.set(ALARM, Date.now())
+    // The session is live when the worker starts, so its start-up sweep keeps
+    // the key: what deletes it below can only be the alarm. Written this way
+    // deliberately — parking an already-expired record instead would let the
+    // start-up sweep do the deleting and the test would pass with the alarm
+    // handler removed entirely.
+    session.set(ITEM, parked(Date.now() + POPUP_SESSION_MS))
     startWorker()
     await settle()
+    expect(session.has(ITEM)).toBe(true)
 
-    onAlarm?.({ name: ALARM })
+    // Five minutes later the deadline arrives, and with it the alarm.
+    session.set(ITEM, parked(Date.now() - 1))
+    fireAlarm()
     await settle()
 
     expect(session.has(ITEM)).toBe(false)
@@ -113,13 +140,13 @@ describe('the extension worker and the parked key', () => {
     // Five minutes pass and the deadline arrives.
     session.set(ITEM, parked(Date.now() - 1))
 
-    onAlarm?.({ name: 'some-other-alarm' })
+    fireAlarm('some-other-alarm')
     await settle()
     expect(session.has(ITEM)).toBe(true)
 
     // The same record, the same worker: only the name is different, so this is
     // what shows the check above did the work rather than a broken fixture.
-    onAlarm?.({ name: ALARM })
+    fireAlarm()
     await settle()
     expect(session.has(ITEM)).toBe(false)
   })
@@ -156,6 +183,18 @@ describe('the extension worker and the parked key', () => {
     expect(session.has(ITEM)).toBe(false)
   })
 
+  it('deletes a record with a good deadline but no key in it', async () => {
+    // The two ends have to agree about what counts as rubbish, or the worker
+    // keeps — and arms an alarm for — records `resumePopupSession` throws away
+    // on sight. Left by an older version of the popup, most plausibly.
+    session.set(ITEM, { salt: 'salt-one', expiresAt: Date.now() + POPUP_SESSION_MS })
+
+    startWorker()
+    await settle()
+
+    expect(session.has(ITEM)).toBe(false)
+  })
+
   it('leaves a session that is still running, and gives it a wake-up if it has none', async () => {
     // Repair work: the popup arms the alarm as it parks, so this only matters
     // if the browser refused it or a sweep raced the park. A parked key with
@@ -170,10 +209,14 @@ describe('the extension worker and the parked key', () => {
     expect(alarms.get(ALARM)).toBe(ends)
   })
 
-  it('does not disturb the wake-up a running session already has', async () => {
+  it('corrects a wake-up armed for the wrong time', async () => {
+    // What a park whose `create` failed leaves behind while an older alarm
+    // survives: a live session watched by an alarm an hour out. Checking only
+    // whether *an* alarm exists would walk past this, and the key would sit
+    // unwatched for the rest of its deadline.
     const ends = Date.now() + POPUP_SESSION_MS
     session.set(ITEM, parked(ends))
-    alarms.set(ALARM, ends)
+    alarms.set(ALARM, Date.now() + 60 * 60 * 1000)
 
     startWorker()
     await settle()
@@ -190,13 +233,55 @@ describe('the extension worker and the parked key', () => {
     alarms.set(ALARM, Date.now())
     startWorker()
     await settle()
-    alarms.delete(ALARM)
 
-    onAlarm?.({ name: ALARM })
+    fireAlarm()
     await settle()
 
     expect(session.has(ITEM)).toBe(true)
     expect(alarms.get(ALARM)).toBe(ends)
+  })
+
+  it('asks for a wake-up that does not outlive the browser', async () => {
+    // The storage it sweeps is emptied when the browser closes, so a persisted
+    // alarm can only wake the worker for nothing — and Chrome writes persisted
+    // alarms to the profile, where one would be a note of the minute a vault
+    // was unlocked in an app that records nothing else about when it is used.
+    session.set(ITEM, parked(Date.now() + POPUP_SESSION_MS))
+
+    startWorker()
+    await settle()
+
+    expect(lastAlarmInfo?.persistAcrossSessions).toBe(false)
+  })
+
+  it('falls back to a plain alarm where that option is not understood', async () => {
+    const ends = Date.now() + POPUP_SESSION_MS
+    session.set(ITEM, parked(ends))
+    const older = browser()
+    older.alarms.create = async (name: string, info: { persistAcrossSessions?: boolean; when: number }) => {
+      if ('persistAcrossSessions' in info) throw new Error('Unexpected property')
+      alarms.set(name, info.when)
+    }
+
+    startWorker(older)
+    await settle()
+
+    expect(alarms.get(ALARM)).toBe(ends)
+  })
+
+  it('keeps working — messages included — on a browser with no alarms API', async () => {
+    // A worker that throws while starting registers nothing at all, so a
+    // missing `chrome.alarms` here would take the autofill relay down with it.
+    // The session code treats the API as optional; so must this.
+    const withoutAlarms = browser() as { alarms?: unknown; runtime: { onMessage: unknown } }
+    delete withoutAlarms.alarms
+    session.set(ITEM, parked(Date.now() - 1))
+
+    expect(() => startWorker(withoutAlarms)).not.toThrow()
+    await settle()
+
+    expect(onMessage).toBeTypeOf('function')
+    expect(session.has(ITEM)).toBe(false)
   })
 
   it('does not cancel the alarm for a key that is not parked yet', async () => {

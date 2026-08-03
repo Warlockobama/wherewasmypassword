@@ -107,9 +107,75 @@ cancelled by a lock and by the switch, only ever one of them, and the key still
 parked on a browser whose alarms API is missing or refuses), and ten in a new
 `background.test.ts` covering the worker half, which had no tests at all before.
 `npm run build` clean. `npm run autofill` 42/42 — five more than before,
-including the deadline proved end to end in a real browser: a record parked in
-the shape the popup writes, the alarm the popup arms, and then nothing but the
-shipped worker, which wakes and deletes it. (`when` under thirty seconds is
-clamped for a packed extension but not an unpacked one, which is what the
-harness loads, so it costs a second rather than half a minute.)
+including the deadline proved in a real browser: a record parked in the shape
+the popup writes, the alarm the popup arms, and then nothing but the shipped
+worker's handler to delete it. (`when` under thirty seconds is clamped for a
+packed extension but not an unpacked one, which is what the harness loads, so it
+costs a second rather than half a minute.) `npm run visual` green.
+
+## Adversarial review, same day
+
+An independent pass over the change found five things worth fixing, one of them
+worse than anything the decision was about.
+
+1. **A browser with no `chrome.alarms` lost autofill entirely.** The worker
+   registered `chrome.alarms.onAlarm` unguarded at its top level. A worker that
+   throws while starting registers *nothing*, so the message listener below it
+   never ran and both `wwmp-autofill-relay` and `wwmp-open-app` were dead —
+   measured, not theorised. Every other browser API this file touches was
+   already defended, and `session.ts` treats the alarms API as optional with two
+   tests to say so; the worker was the one place that did not. Now guarded, with
+   a test that a browser without the API still registers the relay and still
+   sweeps.
+2. **The park wrote the record before arming the alarm** — and the comment
+   defending that order argued, correctly, for the opposite one. Nothing awaits
+   `startPopupSession`, and a popup is destroyed the instant it loses focus, so
+   being cut off between the two is real. An alarm with no record wakes the
+   worker to find nothing; a record with no alarm is the whole gap. The alarm is
+   armed first now, and again after the write.
+3. **The clear counter does not cross documents.** It says "both live in the
+   same popup", but the memory house has its own copy of this module and its own
+   counter, and six of the clear call sites are in it. A "Lock now" there,
+   landing inside a park here, can cancel an alarm this document never saw. Not
+   closable with a counter — they are two ordinary racing writers of one storage
+   area — so instead: arm on both sides of the write, and arm again whenever a
+   popup resumes a session. Whatever an interleaving leaves parked has a
+   deadline. The comment now says what is actually true.
+4. **The worker's repair was inoperative on Chrome before 111 and never
+   corrected a wrong time.** It asked `chrome.alarms.get` first, whose promise
+   form is Chrome 111+ and which throws without a callback before that — a
+   repair that silently never runs. And "an alarm exists" is not "an alarm for
+   this deadline": a park whose `create` failed while an older alarm survived
+   left the key watched by a wake-up at the wrong hour. It now simply says when
+   the deadline is, every time; `create` on a fixed name replaces.
+5. **Two of the ten worker tests passed vacuously**, including the one named for
+   the headline behaviour: it parked an already-expired record, so the start-up
+   sweep deleted it before the alarm was fired and the test passed with the
+   handler deleted. Both rewritten and confirmed to fail under mutation, along
+   with the rest.
+
+Two smaller corrections came with them: the worker now applies the *shape* half
+of the reader's rule as well as the deadline half, so a record with no key in it
+is deleted rather than kept and armed for; and the alarm asks not to persist
+across a browser restart where the browser knows that option (falling back to a
+plain alarm where it does not), since the storage it sweeps is emptied at
+browser close anyway and a persisted alarm is a note on disk of the minute a
+vault was unlocked.
+
+Two claims were also walked back rather than fixed. The comment that "parking a
+key is what starts this worker" is wrong — `storage.session.set` starts a worker
+only for a `storage.onChanged` listener, and there is none; the rule it was
+defending (a sweep that finds nothing parked leaves the alarm alone) still
+holds, because a fill message can start the worker while a popup is parking. And
+the browser-level gate proves that a *running* worker handles its own alarm, not
+that a stopped one is started for it: a worker with a debugger attached does not
+idle out, so that half is Chrome's contract and outside what this harness can
+observe.
+
+**Gates after the fixes:** `npm test` 170 passed — seven more tests again, for
+the order the park writes in, the fallback on both sides when a browser rejects
+the persistence flag, the wake-up asking not to persist, the wake-up put back on
+resume, a worker that starts without an alarms API, and a record with no key in
+it. Every new test in both files was confirmed to fail under mutation of the
+behaviour it names. `npm run build` clean, `npm run autofill` 42/42,
 `npm run visual` green.

@@ -34,19 +34,25 @@ const POPUP_SESSION_ALARM = 'popup-session-deadline'
 const POPUP_SESSION_MS = 5 * 60 * 1000
 
 /**
- * Whether a parked record is one this extension would still accept: a deadline
- * in the future, and no further off than one whole session.
+ * Whether a parked record is one this extension would still accept: the shape a
+ * key is parked in, and a deadline in the future no further off than one whole
+ * session.
  *
- * The rule is `withinLimit` in `src/popup/session.ts`, deliberately to the
- * letter — the worker deletes exactly what the popup would refuse, and nothing
- * else. The upper bound is not decoration: a clock stepped backwards (an NTP
+ * The rule is `asSessionRecord` plus `withinLimit` in `src/popup/session.ts`,
+ * deliberately to the letter — the worker deletes exactly what the popup would
+ * refuse, and nothing else. The upper bound is not decoration: a clock stepped backwards (an NTP
  * correction after a suspend, a dual-boot machine disagreeing about the RTC)
  * leaves a record that is unusable to every reader and yet not "expired", and
  * without the bound it would be the one thing neither end ever deletes.
  */
 function acceptablePopupSession(record) {
   if (!record || typeof record !== 'object') return false
-  const { expiresAt } = record
+  const { key, salt, expiresAt } = record
+  // The shape half of the rule is `asSessionRecord`'s, the deadline half is
+  // `withinLimit`'s. Both, or the two ends disagree about what is rubbish and
+  // the worker leaves behind records no popup will ever pick up again.
+  if (typeof key !== 'string' || key === '') return false
+  if (typeof salt !== 'string' || salt === '') return false
   if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) return false
   const now = Date.now()
   return expiresAt > now && expiresAt <= now + POPUP_SESSION_MS
@@ -71,16 +77,17 @@ function acceptablePopupSession(record) {
 async function sweepPopupSession() {
   try {
     const record = (await chrome.storage.session.get(POPUP_SESSION_ITEM))[POPUP_SESSION_ITEM]
-    // Nothing parked. Deliberately not also cancelling the alarm: a popup
-    // parking a key is what starts this worker, so "no record" can mean "not
-    // written yet", and cancelling then would take away the wake-up for a key
-    // that is about to exist. A stale alarm only ever wakes us to find nothing.
+    // Nothing parked. Deliberately not also cancelling the alarm: this worker
+    // starts on messages it is sent, and a popup can be parking a key at the
+    // same moment (unlocking in the popup, then a fill), so "no record" can
+    // mean "not written yet" — and cancelling then would take the wake-up away
+    // from a key about to exist. A stale alarm only wakes us to find nothing.
     if (record === undefined) return null
     if (acceptablePopupSession(record)) return record
     await chrome.storage.session.remove(POPUP_SESSION_ITEM)
     // Safe in this order and only in this order: the record is already gone, so
     // there is nothing left for the alarm to delete.
-    await chrome.alarms.clear(POPUP_SESSION_ALARM)
+    await chrome.alarms?.clear(POPUP_SESSION_ALARM)
   } catch {
     // Nothing to be done about a storage area that will not answer, and this
     // must never be the reason the worker fails to start.
@@ -89,19 +96,35 @@ async function sweepPopupSession() {
 }
 
 /**
- * Make sure a session that is still live has a wake-up waiting for it.
+ * Point the wake-up at a live session's own deadline.
  *
- * The popup arms one as it parks, so this is only ever repair work: an alarm
- * the browser refused, or one cancelled by a sweep that raced a park. A parked
- * key with no alarm is precisely the gap `0017` closed, so it is worth the
+ * Unconditional rather than "only if none is armed". Checking first would need
+ * `chrome.alarms.get`, whose promise form arrived in Chrome 111 and which
+ * throws without a callback before that — a repair that silently never runs on
+ * an older browser is worse than no repair. And it would leave an alarm set for
+ * the *wrong* time alone, which is what a park whose `create` failed while an
+ * older alarm survived leaves behind. `create` on a fixed name replaces, so
+ * saying what the deadline is every time is both simpler and more correct.
+ *
+ * The popup arms one as it parks, so this is only ever repair work — but a
+ * parked key with no alarm is precisely the gap `0017` closed, and it is worth
  * three lines to make sure a worker start cannot leave one behind.
  */
-async function ensureDeadlineAlarm(record) {
+async function armDeadlineAlarm(record) {
+  const when = record.expiresAt
   try {
-    if (await chrome.alarms.get(POPUP_SESSION_ALARM)) return
-    await chrome.alarms.create(POPUP_SESSION_ALARM, { when: record.expiresAt })
+    // `persistAcrossSessions` for the reason `session.ts` gives: this storage
+    // area is emptied when the browser closes, so an alarm that survives a
+    // restart can only wake us for nothing — and a persisted one is written to
+    // the profile, where it would record the minute a vault was unlocked.
+    await chrome.alarms.create(POPUP_SESSION_ALARM, { when, persistAcrossSessions: false })
   } catch {
-    /* no alarms API, or it refused; the sweep on the next start still runs */
+    try {
+      // A browser that does not know the option rejects the whole description.
+      await chrome.alarms.create(POPUP_SESSION_ALARM, { when })
+    } catch {
+      /* no alarms API, or it refused; the sweep on the next start still runs */
+    }
   }
 }
 
@@ -109,21 +132,30 @@ async function ensureDeadlineAlarm(record) {
  * The deadline itself. Registered at the top level, because that is what lets
  * the browser start this worker to deliver it — the whole point of using an
  * alarm rather than a timer.
+ *
+ * Guarded, because a worker that throws while it is starting registers nothing
+ * at all: without this, a browser with no `chrome.alarms` — an old Chromium, an
+ * enterprise policy blocking the permission — would lose the message listener
+ * below with it, and autofill would stop working entirely. The session code
+ * already treats a missing alarms API as "no wake-up, nothing else changes",
+ * and this is the same posture on the worker's side.
  */
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name !== POPUP_SESSION_ALARM) return
-  sweepPopupSession().then(
-    (survivor) => {
-      // Reachable only if the clock moved under the alarm, since parking again
-      // replaces it: the record that outlives its own wake-up gets another one
-      // rather than being left with nothing watching it.
-      if (survivor) return ensureDeadlineAlarm(survivor)
-    },
-    () => {},
-  )
-})
+if (chrome.alarms?.onAlarm) {
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name !== POPUP_SESSION_ALARM) return
+    sweepPopupSession().then(
+      (survivor) => {
+        // Reachable only if the clock moved under the alarm, since parking
+        // again replaces it: the record that outlives its own wake-up gets
+        // another one rather than being left with nothing watching it.
+        if (survivor) return armDeadlineAlarm(survivor)
+      },
+      () => {},
+    )
+  })
+}
 
-sweepPopupSession().then((survivor) => survivor && ensureDeadlineAlarm(survivor))
+sweepPopupSession().then((survivor) => survivor && armDeadlineAlarm(survivor))
 
 /**
  * Open the full palace tab — or focus the one already open. Each tab is a

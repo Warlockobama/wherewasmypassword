@@ -510,9 +510,15 @@ async function runSuite({ extDir, browser, port, label, hasGrant }) {
 
     // The deadline, end to end in a real browser (`decisions/0017`). A record
     // in the shape the popup parks, past its deadline, plus the alarm the popup
-    // arms — and then nothing but the shipped worker, which has to wake up and
-    // delete it. Nothing else can be doing the deleting: the worker is already
-    // running (this evaluation is in it), so its start-up sweep is long past.
+    // arms — and then nothing but the shipped worker's own handler to delete
+    // it. Nothing else can be doing the deleting: the worker is already running
+    // (this evaluation is in it), so its start-up sweep is long past.
+    //
+    // What this does NOT show is the other half of why an alarm was worth a
+    // permission — that the browser *starts* a stopped worker to deliver one.
+    // A worker with a DevTools session attached does not idle out, and the poll
+    // below runs inside it, so the worker here never sleeps. That half is
+    // Chrome's contract rather than this extension's code.
     //
     // A packed extension will not fire an alarm less than thirty seconds out;
     // an unpacked one, which is what this harness loads, has no such floor, so
@@ -533,7 +539,7 @@ async function runSuite({ extDir, browser, port, label, hasGrant }) {
       } catch (e) { return 'threw: ' + e.message }
     })()`)
     check(
-      'the deadline alarm wakes the worker, which deletes the parked key',
+      'the worker deletes the parked key when its deadline alarm arrives',
       sweptAtDeadline === 'deleted',
       `the worker reported: ${sweptAtDeadline}`,
     )

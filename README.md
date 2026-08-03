@@ -96,10 +96,12 @@ you can't hide something in a drawer and open it later. The illustrated house ca
   minutes run from the unlock and are not extended by using it; **Lock now** in either
   place ends it early, as does turning the setting off, changing the passphrase, or
   restoring or deleting the vault. Past the deadline the key is not merely refused: the
-  browser wakes the extension at that exact moment to delete it, and the wake-up is
-  cancelled by every lock (`decisions/0017`). The old belts are still there — a sweep on
-  every start of the extension, and the whole area emptied when the browser closes. What
-  it costs is that until the time is up, anyone at
+  browser wakes the extension at the deadline to delete it (Chrome will not fire an alarm
+  less than thirty seconds out, so a session with seconds left on it when you turn the
+  setting on can outlive its deadline by that much, refused throughout), and the wake-up
+  is cancelled by every lock (`decisions/0017`). The old belts are still there — a sweep
+  on every start of the extension, and the whole area emptied when the browser closes.
+  What it costs is that until the time is up, anyone at
   your computer can fill passwords without knowing the phrase — an unattended-machine
   trade, made deliberately (`decisions/0015`).
 

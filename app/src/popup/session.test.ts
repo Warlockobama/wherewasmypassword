@@ -337,6 +337,77 @@ describe('popup session', () => {
     expect((await resumePopupSession(vault()))?.rawKey).toEqual(KEY)
   })
 
+  it('arms a plain alarm on a browser that will not take the persistence flag', async () => {
+    // The alarm asks not to survive a browser restart, which older browsers
+    // reject as an unknown property rather than ignore. A persisted alarm is
+    // much better than none, so the second attempt drops the flag.
+    vi.stubGlobal('chrome', {
+      runtime: { id: 'test-extension' },
+      storage: { session: area(session), local: area(local) },
+      alarms: {
+        create: async (name: string, info: { when: number; persistAcrossSessions?: boolean }) => {
+          if ('persistAcrossSessions' in info) throw new Error('Unexpected property')
+          alarms.set(name, info.when)
+        },
+        clear: async (name: string) => alarms.delete(name),
+      },
+    })
+    await setPopupSessionEnabled(true)
+    const ends = Date.now() + POPUP_SESSION_MS
+
+    await startPopupSession(KEY, 'salt-one', ends)
+
+    expect(alarms.get('popup-session-deadline')).toBe(ends)
+  })
+
+  it('arms the wake-up before the key is on disk, not after', async () => {
+    // A popup is destroyed the instant it loses focus and nothing awaits this
+    // call, so it can be cut off mid-park. An alarm with no record only wakes
+    // the worker to find nothing; a record with no alarm is the gap `0017`
+    // closed — so the order has to be this way round and not the other.
+    const order: string[] = []
+    vi.stubGlobal('chrome', {
+      runtime: { id: 'test-extension' },
+      storage: {
+        session: {
+          ...area(session),
+          set: async (items: Record<string, unknown>) => {
+            order.push('record')
+            for (const [k, v] of Object.entries(items)) session.set(k, v)
+          },
+        },
+        local: area(local),
+      },
+      alarms: {
+        create: async (name: string, info: { when: number }) => {
+          order.push('alarm')
+          alarms.set(name, info.when)
+        },
+        clear: async (name: string) => alarms.delete(name),
+      },
+    })
+    await setPopupSessionEnabled(true)
+
+    await startPopupSession(KEY, 'salt-one', Date.now() + POPUP_SESSION_MS)
+
+    expect(order[0]).toBe('alarm')
+    expect(order).toContain('record')
+  })
+
+  it('puts back a wake-up cancelled by a lock in the other document', async () => {
+    // The memory house has its own copy of this module and its own clear
+    // counter, so a "Lock now" there is invisible to the guard inside a park
+    // here. What it can cancel is the alarm — and resuming is where the popup
+    // notices and arms it again, on the deadline the record already carries.
+    await setPopupSessionEnabled(true)
+    const ends = Date.now() + POPUP_SESSION_MS
+    await startPopupSession(KEY, 'salt-one', ends)
+    alarms.clear()
+
+    expect((await resumePopupSession(vault()))?.expiresAt).toBe(ends)
+    expect(alarms.get('popup-session-deadline')).toBe(ends)
+  })
+
   it('does nothing at all outside the extension', async () => {
     // The same bundle is served as a plain web page, where `chrome` is absent.
     vi.stubGlobal('chrome', undefined)
