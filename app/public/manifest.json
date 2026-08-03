@@ -23,7 +23,8 @@
   "permissions": [
     "activeTab",
     "scripting",
-    "storage"
+    "storage",
+    "alarms"
   ],
   "externally_connectable": { "ids": [] },
   "content_security_policy": {

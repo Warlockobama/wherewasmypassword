@@ -69,9 +69,10 @@ you can't hide something in a drawer and open it later. The illustrated house ca
 - If you forget the phrase, nothing can recover the vault. That's the deal — and the
   whole point of the training.
 - **Autofill without host permissions.** The extension asks for `activeTab`,
-  `scripting` and `storage`, and nothing else — no "read and change all your data on
-  every website". (`storage` reaches nothing outside this extension and adds no warning
-  at install; it is there for the opt-in popup session below.)
+  `scripting`, `storage` and `alarms`, and nothing else — no "read and change all your
+  data on every website". (The last two reach nothing outside this extension and add no
+  warning at install: `storage` holds the opt-in popup session below, and `alarms` is
+  what wakes the extension at that session's deadline to delete the key.)
   `activeTab` is granted for the tab that was active when the toolbar button was
   clicked, which is why filling happens from the popup: a popup is not a tab, so the
   login page underneath stays active and stays granted. (The UI used to open in a full
@@ -94,9 +95,11 @@ you can't hide something in a drawer and open it later. The illustrated house ca
   written to disk, gone when the browser closes, and closed to page scripts. The five
   minutes run from the unlock and are not extended by using it; **Lock now** in either
   place ends it early, as does turning the setting off, changing the passphrase, or
-  restoring or deleting the vault. Past the deadline the key is refused, and deleted the
-  next time the extension runs — at the latest when the browser closes and that storage
-  goes with it (`decisions/0017`). What it costs is that until the time is up, anyone at
+  restoring or deleting the vault. Past the deadline the key is not merely refused: the
+  browser wakes the extension at that exact moment to delete it, and the wake-up is
+  cancelled by every lock (`decisions/0017`). The old belts are still there — a sweep on
+  every start of the extension, and the whole area emptied when the browser closes. What
+  it costs is that until the time is up, anyone at
   your computer can fill passwords without knowing the phrase — an unattended-machine
   trade, made deliberately (`decisions/0015`).
 

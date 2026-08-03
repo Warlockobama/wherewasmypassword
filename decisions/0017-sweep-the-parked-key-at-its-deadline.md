@@ -1,7 +1,6 @@
 # 0017 — Deleting the parked popup key at its deadline, not merely refusing it
 
-**Status:** OPEN — recommended default below; the gap is closed as far as it
-can be without a ruling, so nothing is blocked on this.
+**Status:** RESOLVED (user call, 2026-08-03) — see the resolution at the bottom.
 
 ## What is already true
 
@@ -54,3 +53,63 @@ it does not close a class.
 A yes or no. If yes it is an hour, including a test that the alarm is armed on
 park and cancelled on lock, and the permission check in `scripts/autofill-check.mjs`
 updated to the new exact set.
+
+## RESOLUTION (user call, 2026-08-03 — via exec assistant)
+
+1. **Add the alarms permission and enforce deadline deletion**: James said "we'll go with that". Implement a one-shot alarm when a key is parked so the extension wakes and deletes it at the five-minute deadline, and clear the alarm on lock. Update tests and the permission check to match.
+2. **Keep existing restrictions**: Continue to refuse access to the key after the deadline and avoid broadening behavior beyond the permission needed for deadline cleanup.
+
+## Implemented (2026-08-03)
+
+`alarms` is the fourth permission. Parking a key arms one one-shot alarm named
+`popup-session-deadline` for the deadline the key already has — not five minutes
+from the park, so ticking the box mid-session still ends when that session was
+always going to end. Every clear cancels it, which means every lock: the popup's
+Lock button, "Lock now" in the memory house, a passphrase change, a restore, an
+undo, a delete, and turning the setting off. Always the one name, so a second
+unlock replaces the wake-up rather than leaving one pointed at a key that is no
+longer there.
+
+The worker registers `chrome.alarms.onAlarm` at its top level — registered any
+later there is nothing for the browser to start it *for*, and the alarm is
+delivered to nobody. It deletes the record, then cancels the alarm; the two are
+in that order deliberately, since the reverse can leave a key parked with
+nothing left to sweep it.
+
+Three things came with it that were not asked for and are worth naming:
+
+1. **The worker now deletes what a reader would refuse, not merely what has
+   expired.** Its old rule was `expiresAt <= now`, which misses a record dated
+   *further ahead* than a whole session — what a clock stepped backwards leaves
+   behind. `session.ts` has refused those since `0015`, so nothing would ever
+   pick one up again, and nothing would ever delete it either. The worker now
+   applies `withinLimit` to the letter.
+2. **A worker start repairs a missing wake-up.** If a live key is parked and no
+   alarm is armed — the browser refused it, or a sweep raced a park — the worker
+   arms one. "A parked key always has something watching it" is the property
+   this doc bought; leaving it resting on one call site would be a thinner
+   version of it.
+3. **A sweep that finds nothing parked deliberately does not cancel the alarm.**
+   Parking a key is one of the things that starts the worker, so "no record" can
+   mean "not written yet", and cancelling then would take the deadline away from
+   a key about to exist. A stale alarm only ever wakes the worker to find
+   nothing, which costs nothing.
+
+**What it still does not close.** Chrome will not fire an alarm less than thirty
+seconds out, so a key parked with seconds left on it — ticking the box four and
+a half minutes in — can outlive its deadline by that much, refused the whole
+time. And `0008` stands: against a browser already running an attacker's code
+this narrows a window, it does not close a class.
+
+**Gates:** `npm test` 156 passed, 18 of them new — eight in `session.test.ts`
+(the wake-up armed for the deadline in hand, not armed while the session is off,
+cancelled by a lock and by the switch, only ever one of them, and the key still
+parked on a browser whose alarms API is missing or refuses), and ten in a new
+`background.test.ts` covering the worker half, which had no tests at all before.
+`npm run build` clean. `npm run autofill` 42/42 — five more than before,
+including the deadline proved end to end in a real browser: a record parked in
+the shape the popup writes, the alarm the popup arms, and then nothing but the
+shipped worker, which wakes and deletes it. (`when` under thirty seconds is
+clamped for a packed extension but not an unpacked one, which is what the
+harness loads, so it costs a second rather than half a minute.)
+`npm run visual` green.

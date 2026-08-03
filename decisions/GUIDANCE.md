@@ -15,3 +15,5 @@
 - 2026-08-02 RESOLVED 0015-popup-session-sharing-and-copy.md — 1. **Popup session behavior**: James said "I agree" to the suggested default. Add an opt-in "stay unlocked for 5 minutes
 - 2026-08-02 UPDATE 0016-undo-a-restore-and-record-rollback.md — 1. **Undo restore**: James said "let’s go with the recommendation". Add an "undo restore" affordance on the lock screen 
 - 2026-08-02 RESOLVED 0016-undo-a-restore-and-record-rollback.md — 1. **Undo restore**: James said "let’s go with the recommendation". Add an "undo restore" affordance on the lock screen 
+- 2026-08-03 RESOLVED 0017-sweep-the-parked-key-at-its-deadline.md — 1. **Add the alarms permission and enforce deadline deletion**: James said "we'll go with that". Implement a one-shot al
+- 2026-08-03 RESOLVED 0018-how-long-the-undo-offer-should-live.md — 1. **Require passphrase to use undo-restore**: James said "go with the passphrase". The undo-restore swap must prompt fo

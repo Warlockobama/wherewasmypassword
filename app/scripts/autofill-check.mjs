@@ -185,13 +185,15 @@ async function checkShippedBuild() {
   )
   // Deliberately an exact set rather than a subset: the point is that adding a
   // permission has to be a decision someone takes here, in the open, and not a
-  // line that slips in with a feature. `storage` is the one the five-minute
-  // popup session bought (`decisions/0015`); it grants no access to anything
-  // outside this extension and shows the user no new warning at install.
+  // line that slips in with a feature. Two of these were bought that way:
+  // `storage` by the five-minute popup session (`decisions/0015`) and `alarms`
+  // by the ruling that the key must be *deleted* at its deadline rather than
+  // merely refused (`decisions/0017`). Neither grants access to anything
+  // outside this extension, and neither shows the user a new warning at install.
   check(
-    'the permission set is still just activeTab + scripting + storage',
+    'the permission set is still just activeTab + scripting + storage + alarms',
     JSON.stringify([...(manifest.permissions ?? [])].sort()) ===
-      JSON.stringify(['activeTab', 'scripting', 'storage']),
+      JSON.stringify(['activeTab', 'alarms', 'scripting', 'storage']),
     `permissions=${JSON.stringify(manifest.permissions)}`,
   )
   // The parked key lives in `chrome.storage.session`. Content scripts cannot
@@ -203,6 +205,16 @@ async function checkShippedBuild() {
     'the worker pins session storage to trusted contexts',
     /setAccessLevel\(\s*\{\s*accessLevel:\s*'TRUSTED_CONTEXTS'\s*\}\s*\)/.test(worker),
     `setAccessLevel present=${worker.includes('setAccessLevel')}`,
+  )
+  // The permission is only worth having if something listens for what it buys.
+  // The listener must be registered at the worker's top level, or the browser
+  // has nothing to start the worker *for* and the alarm is delivered to nobody.
+  check(
+    'the worker listens for the deadline alarm that deletes the parked key',
+    /chrome\.alarms\.onAlarm\.addListener/.test(worker) &&
+      worker.includes("'popup-session-deadline'"),
+    `onAlarm listener=${/chrome\.alarms\.onAlarm\.addListener/.test(worker)} ` +
+      `alarm name present=${worker.includes("'popup-session-deadline'")}`,
   )
   return results
 }
@@ -494,6 +506,45 @@ async function runSuite({ extDir, browser, port, label, hasGrant }) {
       'a trusted extension context can park a value in session storage',
       parked === 'parked',
       `the worker read back: ${parked}`,
+    )
+
+    // The deadline, end to end in a real browser (`decisions/0017`). A record
+    // in the shape the popup parks, past its deadline, plus the alarm the popup
+    // arms — and then nothing but the shipped worker, which has to wake up and
+    // delete it. Nothing else can be doing the deleting: the worker is already
+    // running (this evaluation is in it), so its start-up sweep is long past.
+    //
+    // A packed extension will not fire an alarm less than thirty seconds out;
+    // an unpacked one, which is what this harness loads, has no such floor, so
+    // this costs a second rather than half a minute.
+    const sweptAtDeadline = await swEval(`(async () => {
+      try {
+        await chrome.storage.session.set({ 'popup-session':
+          { key: 'AAAA', salt: 'probe-not-a-real-key', expiresAt: Date.now() - 1000 } })
+        if (!(await chrome.storage.session.get('popup-session'))['popup-session']) {
+          return 'the probe record did not stick'
+        }
+        await chrome.alarms.create('popup-session-deadline', { when: Date.now() })
+        for (let i = 0; i < 40; i++) {
+          await new Promise((ok) => setTimeout(ok, 250))
+          if (!(await chrome.storage.session.get('popup-session'))['popup-session']) return 'deleted'
+        }
+        return 'still parked ten seconds past its deadline'
+      } catch (e) { return 'threw: ' + e.message }
+    })()`)
+    check(
+      'the deadline alarm wakes the worker, which deletes the parked key',
+      sweptAtDeadline === 'deleted',
+      `the worker reported: ${sweptAtDeadline}`,
+    )
+    // And the alarm is not left armed once there is nothing to delete.
+    const alarmAfter = await swEval(
+      `chrome.alarms.get('popup-session-deadline').then((a) => (a ? 'still armed' : 'cleared'))`,
+    )
+    check(
+      'and clears the alarm with it, rather than leaving one behind',
+      alarmAfter === 'cleared',
+      `after the sweep the alarm is: ${alarmAfter}`,
     )
 
     if (hasGrant) {

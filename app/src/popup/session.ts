@@ -23,14 +23,17 @@ import type { StoredVault } from '../storage/db.ts'
  *   timer would forgive a suspended laptop the entire time it was asleep, which
  *   is the bug `decisions/0008` already fixed once for the full tab.
  *
- * Refusing an expired session and *deleting* it are not the same moment, and it
- * is worth being exact about which is guaranteed. Refusal is: past the deadline
- * nothing here will hand the key back. Deletion happens on the next popup open,
- * on the next start of the extension's worker (`public/background.js` sweeps
- * it), and unconditionally when the browser closes and this storage area goes
- * with it — so a key can sit unusable in browser memory for a while if the
- * extension is never touched again. See `decisions/0017` for whether that gap
- * is worth an alarm to close.
+ * Refusing an expired session and *deleting* it were not always the same
+ * moment. Refusal is immediate — past the deadline nothing here hands the key
+ * back — but deleting needs something to be running, and at the deadline the
+ * popup that parked the key is long destroyed and an MV3 worker is killed after
+ * about thirty idle seconds, so a `setTimeout` does not survive to do it. That
+ * left a key nobody could use sitting in browser memory until the extension was
+ * next touched. `decisions/0017` bought one small permission to close it: every
+ * park arms a one-shot `chrome.alarms` wake-up for the deadline, and the worker
+ * deletes the record when it fires (`public/background.js`). Every lock cancels
+ * it. Belt and braces remain — the worker also sweeps on every start, and the
+ * browser closing empties this storage area outright.
  *
  * What this gives up is stated plainly in `0015`: for those five minutes a
  * laptop left unattended will fill passwords without the phrase, and anything
@@ -57,6 +60,13 @@ export const POPUP_SESSION_MS = 5 * 60 * 1000
  */
 const SESSION_ITEM = 'popup-session'
 const PREFERENCE_ITEM = 'popup-session-enabled'
+
+/**
+ * The one-shot wake-up that deletes the parked key at its deadline. Also kept
+ * in step with `public/background.js`, which is the side that handles it — a
+ * worker listening for a different name would never delete anything.
+ */
+const DEADLINE_ALARM = 'popup-session-deadline'
 
 /**
  * Bumped by every clear.
@@ -103,6 +113,53 @@ function sessionArea(): chrome.storage.StorageArea | null {
 
 function localArea(): chrome.storage.StorageArea | null {
   return isExtensionContext() ? (chrome.storage?.local ?? null) : null
+}
+
+/**
+ * Absent for the same reason the storage areas are — the hosted build has no
+ * `chrome` at all — and absent too on a browser too old for the API. Both mean
+ * the same thing here: no wake-up, so the key waits for the worker's next start
+ * exactly as it did before the alarm existed. Never a reason to refuse to park.
+ */
+function alarmsApi(): typeof chrome.alarms | null {
+  return isExtensionContext() ? (chrome.alarms ?? null) : null
+}
+
+/**
+ * Arm the wake-up that deletes the parked key at `expiresAt`.
+ *
+ * Always the same alarm name, so parking a second key replaces the first one's
+ * wake-up rather than leaving two: at most one alarm exists, and it belongs to
+ * whatever is parked now.
+ *
+ * Chrome will not fire an alarm less than thirty seconds out however near the
+ * deadline is, so a key parked with seconds left on it — the user ticking the
+ * box four and a half minutes into a session — can outlive its deadline by that
+ * much. It is refused throughout, and this is a floor on the browser's side
+ * rather than something to work around.
+ */
+async function armDeadlineAlarm(expiresAt: number): Promise<void> {
+  const alarms = alarmsApi()
+  if (!alarms) return
+  try {
+    await alarms.create(DEADLINE_ALARM, { when: expiresAt })
+  } catch {
+    // A browser that will not take the alarm still has the worker's sweep and
+    // the browser-close wipe; failing to park the key over this would trade a
+    // narrowed window for a feature the user asked for.
+  }
+}
+
+/** Cancel it. Every lock goes through here, via `clearPopupSession`. */
+async function clearDeadlineAlarm(): Promise<void> {
+  const alarms = alarmsApi()
+  if (!alarms) return
+  try {
+    await alarms.clear(DEADLINE_ALARM)
+  } catch {
+    // An alarm that outlives the record it was armed for wakes the worker once
+    // to find nothing parked, which is a no-op.
+  }
 }
 
 /** Whether the user has opted in. Anything unreadable counts as off. */
@@ -178,6 +235,9 @@ export async function startPopupSession(
   // say. Writing now would quietly undo it.
   if (generation !== clearGeneration) return
   await store.set({ [SESSION_ITEM]: { key, salt, expiresAt } })
+  // After the record, never before it: an alarm that fires with nothing parked
+  // is a no-op, where a record parked with no alarm is the gap `0017` closed.
+  await armDeadlineAlarm(expiresAt)
   // And once more after the write, since the same race runs across it.
   if (generation !== clearGeneration) await clearPopupSession()
 }
@@ -266,13 +326,18 @@ export async function clearPopupSession(): Promise<void> {
   // racing a park is stopped in every context.
   clearGeneration++
   const store = sessionArea()
-  if (!store) return
-  try {
-    await store.remove(SESSION_ITEM)
-  } catch {
-    // Nothing useful to do: the caller is locking, and a storage area that
-    // refuses a remove will not accept a fallback either.
+  if (store) {
+    try {
+      await store.remove(SESSION_ITEM)
+    } catch {
+      // Nothing useful to do: the caller is locking, and a storage area that
+      // refuses a remove will not accept a fallback either.
+    }
   }
+  // Last, and whatever the removal did: the alarm exists only to delete a
+  // record, so cancelling it before the record was gone would be the one order
+  // that can leave a key parked with nothing left to sweep it.
+  await clearDeadlineAlarm()
 }
 
 /**

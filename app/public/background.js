@@ -28,36 +28,102 @@ try {
 
 /** Kept in step with `SESSION_ITEM` in `src/popup/session.ts`. */
 const POPUP_SESSION_ITEM = 'popup-session'
+/** Kept in step with `DEADLINE_ALARM` there — the popup arms it, this handles it. */
+const POPUP_SESSION_ALARM = 'popup-session-deadline'
+/** Kept in step with `POPUP_SESSION_MS` there. */
+const POPUP_SESSION_MS = 5 * 60 * 1000
 
 /**
- * Delete a parked key whose deadline has passed.
+ * Whether a parked record is one this extension would still accept: a deadline
+ * in the future, and no further off than one whole session.
+ *
+ * The rule is `withinLimit` in `src/popup/session.ts`, deliberately to the
+ * letter — the worker deletes exactly what the popup would refuse, and nothing
+ * else. The upper bound is not decoration: a clock stepped backwards (an NTP
+ * correction after a suspend, a dual-boot machine disagreeing about the RTC)
+ * leaves a record that is unusable to every reader and yet not "expired", and
+ * without the bound it would be the one thing neither end ever deletes.
+ */
+function acceptablePopupSession(record) {
+  if (!record || typeof record !== 'object') return false
+  const { expiresAt } = record
+  if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) return false
+  const now = Date.now()
+  return expiresAt > now && expiresAt <= now + POPUP_SESSION_MS
+}
+
+/**
+ * Delete the parked key unless it is still one a popup could use, and hand back
+ * the record if it survived.
  *
  * `session.ts` refuses an expired session, so nothing can *use* one — but
  * refusing is not deleting, and until something deletes it the bytes are still
  * sitting in browser memory for a debugger or an extension-context compromise
  * to find. Nothing in an extension page can run at the deadline: the popup that
- * parked the key was destroyed the moment the user clicked away.
+ * parked the key was destroyed the moment the user clicked away. So the popup
+ * arms an alarm (`decisions/0017`) and this worker — the only thing here that
+ * runs without a page — is what wakes for it.
  *
- * This worker is the only thing that runs without a page, so it sweeps every
- * time it starts — which is every message, every browser start, every wake. It
- * is not a timer and does not pretend to be one: it closes the gap whenever the
- * extension is used again, and the browser closing empties this storage area
- * outright. `decisions/0017` asks whether the remainder is worth an alarm.
+ * It also runs on every start of the worker, which is every message, every
+ * browser start, every wake. That is the belt to the alarm's braces: it costs
+ * nothing, and it is what still holds if an alarm was never armed.
  */
-async function sweepExpiredPopupSession() {
+async function sweepPopupSession() {
   try {
     const record = (await chrome.storage.session.get(POPUP_SESSION_ITEM))[POPUP_SESSION_ITEM]
-    if (!record) return
-    if (typeof record.expiresAt !== 'number' || record.expiresAt <= Date.now()) {
-      await chrome.storage.session.remove(POPUP_SESSION_ITEM)
-    }
+    // Nothing parked. Deliberately not also cancelling the alarm: a popup
+    // parking a key is what starts this worker, so "no record" can mean "not
+    // written yet", and cancelling then would take away the wake-up for a key
+    // that is about to exist. A stale alarm only ever wakes us to find nothing.
+    if (record === undefined) return null
+    if (acceptablePopupSession(record)) return record
+    await chrome.storage.session.remove(POPUP_SESSION_ITEM)
+    // Safe in this order and only in this order: the record is already gone, so
+    // there is nothing left for the alarm to delete.
+    await chrome.alarms.clear(POPUP_SESSION_ALARM)
   } catch {
     // Nothing to be done about a storage area that will not answer, and this
     // must never be the reason the worker fails to start.
   }
+  return null
 }
 
-sweepExpiredPopupSession()
+/**
+ * Make sure a session that is still live has a wake-up waiting for it.
+ *
+ * The popup arms one as it parks, so this is only ever repair work: an alarm
+ * the browser refused, or one cancelled by a sweep that raced a park. A parked
+ * key with no alarm is precisely the gap `0017` closed, so it is worth the
+ * three lines to make sure a worker start cannot leave one behind.
+ */
+async function ensureDeadlineAlarm(record) {
+  try {
+    if (await chrome.alarms.get(POPUP_SESSION_ALARM)) return
+    await chrome.alarms.create(POPUP_SESSION_ALARM, { when: record.expiresAt })
+  } catch {
+    /* no alarms API, or it refused; the sweep on the next start still runs */
+  }
+}
+
+/**
+ * The deadline itself. Registered at the top level, because that is what lets
+ * the browser start this worker to deliver it — the whole point of using an
+ * alarm rather than a timer.
+ */
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== POPUP_SESSION_ALARM) return
+  sweepPopupSession().then(
+    (survivor) => {
+      // Reachable only if the clock moved under the alarm, since parking again
+      // replaces it: the record that outlives its own wake-up gets another one
+      // rather than being left with nothing watching it.
+      if (survivor) return ensureDeadlineAlarm(survivor)
+    },
+    () => {},
+  )
+})
+
+sweepPopupSession().then((survivor) => survivor && ensureDeadlineAlarm(survivor))
 
 /**
  * Open the full palace tab — or focus the one already open. Each tab is a

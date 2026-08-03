@@ -35,6 +35,8 @@ function vault(salt = 'salt-one'): StoredVault {
 /** The two storage areas, as maps, so a test can look at what was written. */
 let session: Map<string, unknown>
 let local: Map<string, unknown>
+/** Alarm name → the moment it is set to fire. */
+let alarms: Map<string, number>
 
 function area(store: Map<string, unknown>) {
   return {
@@ -48,12 +50,27 @@ function area(store: Map<string, unknown>) {
   }
 }
 
+/**
+ * `chrome.alarms`, as far as this module uses it: one named one-shot, created
+ * by name so a second create replaces the first.
+ */
+function alarmsApi() {
+  return {
+    create: async (name: string, info: { when: number }) => {
+      alarms.set(name, info.when)
+    },
+    clear: async (name: string) => alarms.delete(name),
+  }
+}
+
 function installChrome() {
   session = new Map()
   local = new Map()
+  alarms = new Map()
   vi.stubGlobal('chrome', {
     runtime: { id: 'test-extension' },
     storage: { session: area(session), local: area(local) },
+    alarms: alarmsApi(),
   })
 }
 
@@ -223,6 +240,101 @@ describe('popup session', () => {
 
     expect(session.has('popup-session')).toBe(false)
     expect(await resumePopupSession(vault())).toBeNull()
+  })
+
+  it('arms a wake-up for the deadline when it parks a key', async () => {
+    // Nothing else is alive at the deadline to delete the key: the popup that
+    // parked it is destroyed on blur, and an MV3 worker is killed after about
+    // thirty idle seconds, so a timer does not survive to run (`0017`).
+    await setPopupSessionEnabled(true)
+    const ends = Date.now() + POPUP_SESSION_MS
+
+    await startPopupSession(KEY, 'salt-one', ends)
+
+    expect(alarms.get('popup-session-deadline')).toBe(ends)
+  })
+
+  it('arms it for the deadline in hand, not a fresh five minutes', async () => {
+    // Ticking the box two minutes in parks the key on the deadline that session
+    // already has, so the wake-up must be the same moment and not five minutes
+    // from now — otherwise enabling the setting quietly extends the session.
+    await setPopupSessionEnabled(true)
+    const ends = Date.now() + 3 * 60 * 1000
+
+    await startPopupSession(KEY, 'salt-one', ends)
+
+    expect(alarms.get('popup-session-deadline')).toBe(ends)
+  })
+
+  it('arms nothing while the session is off', async () => {
+    await startPopupSession(KEY, 'salt-one', Date.now() + POPUP_SESSION_MS)
+
+    expect([...alarms.keys()]).toEqual([])
+  })
+
+  it('cancels the wake-up when the session is locked', async () => {
+    await setPopupSessionEnabled(true)
+    await startPopupSession(KEY, 'salt-one', Date.now() + POPUP_SESSION_MS)
+
+    await clearPopupSession()
+
+    expect([...alarms.keys()]).toEqual([])
+  })
+
+  it('cancels the wake-up when the preference goes off', async () => {
+    await setPopupSessionEnabled(true)
+    await startPopupSession(KEY, 'salt-one', Date.now() + POPUP_SESSION_MS)
+
+    await setPopupSessionEnabled(false)
+
+    expect([...alarms.keys()]).toEqual([])
+  })
+
+  it('keeps one wake-up, for the key that is parked now', async () => {
+    // A second unlock replaces the parked key; two alarms would mean the first
+    // one waking the worker to delete a key that is not the one it was armed for.
+    await setPopupSessionEnabled(true)
+    const first = Date.now() + 60 * 1000
+    const second = Date.now() + POPUP_SESSION_MS
+
+    await startPopupSession(KEY, 'salt-one', first)
+    await startPopupSession(OTHER_KEY, 'salt-one', second)
+
+    expect(alarms.size).toBe(1)
+    expect(alarms.get('popup-session-deadline')).toBe(second)
+  })
+
+  it('still parks the key on a browser with no alarms API', async () => {
+    // What shipped before `0017`: the key is deleted on the worker's next start
+    // and when the browser closes. Worth less than a wake-up, not broken — and
+    // never a reason to refuse the user the session they asked for.
+    vi.stubGlobal('chrome', {
+      runtime: { id: 'test-extension' },
+      storage: { session: area(session), local: area(local) },
+    })
+    await setPopupSessionEnabled(true)
+
+    await startPopupSession(KEY, 'salt-one', Date.now() + POPUP_SESSION_MS)
+
+    expect((await resumePopupSession(vault()))?.rawKey).toEqual(KEY)
+  })
+
+  it('still parks the key if the browser refuses the alarm', async () => {
+    vi.stubGlobal('chrome', {
+      runtime: { id: 'test-extension' },
+      storage: { session: area(session), local: area(local) },
+      alarms: {
+        create: async () => {
+          throw new Error('no such permission')
+        },
+        clear: async () => false,
+      },
+    })
+    await setPopupSessionEnabled(true)
+
+    await startPopupSession(KEY, 'salt-one', Date.now() + POPUP_SESSION_MS)
+
+    expect((await resumePopupSession(vault()))?.rawKey).toEqual(KEY)
   })
 
   it('does nothing at all outside the extension', async () => {
