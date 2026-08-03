@@ -11,8 +11,10 @@ import {
 import type { StoredVault } from '../storage/db.ts'
 
 /**
- * The undo offer is the only vault-altering control on a locked device, so
- * `decisions/0018` put the archived vault's own passphrase in front of it. What
+ * The undo offer is the vault-altering control on a locked device that costs
+ * nothing but a press — restoring is the other one, ungated, and `decisions/0019`
+ * asks whether it should stay that way. `decisions/0018` put the archived
+ * vault's own passphrase in front of this one. What
  * is worth pinning is the negative: a phrase that does not open the vault being
  * put back leaves *both* records exactly where they were — including the phrase
  * of the vault that is live, which is the one an attacker at a locked machine
