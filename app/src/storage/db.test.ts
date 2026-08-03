@@ -45,7 +45,7 @@ vi.mock('idb', () => ({
 }))
 
 const {
-  archiveCurrentVault,
+  restoreVault,
   deleteVault,
   loadArchivedVault,
   loadPracticeMeta,
@@ -58,14 +58,20 @@ const {
 const t0 = 1700000000000
 const DAY = 24 * 60 * 60 * 1000
 
-/** Only the fields the archive machinery moves around have to be real. */
+/**
+ * Only the fields the archive machinery moves around have to be real — but the
+ * IV and ciphertext do have to *differ* between records. They are what
+ * `sameRecord` leans on to tell one write of one vault from another, and a
+ * fixture that hardcoded them would leave that half of the comparison passing
+ * whatever it was mutated to.
+ */
 function vaultRecord(salt: string, updatedAt: number): StoredVault {
   return {
     version: 2,
     salt,
     kdfParams: { algorithm: 'argon2id', memoryKiB: 256 * 1024, iterations: 3, parallelism: 1 },
-    iv: 'aXY=',
-    ciphertext: 'Y3Q=',
+    iv: btoa(`iv-${salt}`),
+    ciphertext: btoa(`ciphertext-${salt}-${updatedAt}`),
     createdAt: t0,
     updatedAt,
   }
@@ -117,14 +123,26 @@ describe('undoing a restore', () => {
   const mine = vaultRecord('salt-mine', t0)
   const theirs = vaultRecord('salt-restored', t0 + DAY)
 
+  it('sets the outgoing vault aside as it replaces it', async () => {
+    // The two halves are one transaction on purpose. Between them the archive
+    // slot holds the vault that is still live, and an undo in another tab can
+    // swap underneath: it would put the proven vault back and the second half
+    // of this restore would then write over it, destroying the vault whose
+    // passphrase had just been proven.
+    await saveVault(mine)
+
+    await restoreVault(theirs)
+
+    expect(await loadVault()).toEqual(theirs)
+    expect(await loadArchivedVault()).toEqual(mine)
+  })
+
   it('puts back the vault the restore replaced', async () => {
     await saveVault(mine)
-    // What a restore does: set the outgoing vault aside, write the new one.
-    await archiveCurrentVault()
-    await saveVault(theirs)
+    await restoreVault(theirs)
     expect(await loadVault()).toEqual(theirs)
 
-    expect(await undoRestore()).toEqual(mine)
+    expect(await undoRestore(mine)).toEqual(mine)
     expect(await loadVault()).toEqual(mine)
   })
 
@@ -135,15 +153,14 @@ describe('undoing a restore', () => {
     // them: the same unrecoverable loss this exists to remove, pointed the
     // other way.
     await saveVault(mine)
-    await archiveCurrentVault()
-    await saveVault(theirs)
+    await restoreVault(theirs)
 
-    await undoRestore()
+    await undoRestore(mine)
     expect(await loadVault()).toEqual(mine)
     expect(await loadArchivedVault()).toEqual(theirs)
 
     // Pressing again puts things back exactly as they were.
-    expect(await undoRestore()).toEqual(theirs)
+    expect(await undoRestore(theirs)).toEqual(theirs)
     expect(await loadVault()).toEqual(theirs)
     expect(await loadArchivedVault()).toEqual(mine)
   })
@@ -154,13 +171,33 @@ describe('undoing a restore', () => {
     // second replaces what is set aside; the swap must then do nothing rather
     // than put back a vault whose phrase nobody just typed.
     await saveVault(mine)
-    await archiveCurrentVault()
-    await saveVault(theirs)
+    await restoreVault(theirs)
 
+    // A different vault entirely, and — separately — the same vault's salt on
+    // somebody else's ciphertext, since salt alone is not what identifies a
+    // record. Neither may be swapped in.
     expect(await undoRestore(vaultRecord('a-different-vault', t0))).toBeUndefined()
+    expect(await undoRestore({ ...mine, ciphertext: theirs.ciphertext })).toBeUndefined()
+    expect(await undoRestore({ ...mine, iv: theirs.iv })).toBeUndefined()
 
     expect(await loadVault()).toEqual(theirs)
     expect(await loadArchivedVault()).toEqual(mine)
+  })
+
+  it('refuses a record whose header was rewritten under the caller', async () => {
+    // Same ciphertext and IV, key-derivation settings no browser will run.
+    // Anyone who can write the archive slot can write this, and comparing only
+    // the body would let it through: the proof upstream derives against the
+    // sane parameters it holds in memory, succeeds, and the swap would install
+    // a live vault that no passphrase can open.
+    await saveVault(mine)
+    await restoreVault(theirs)
+    const tampered = { ...mine, kdfParams: { ...mine.kdfParams, memoryKiB: 2 * 1024 * 1024 } }
+    store.get('vault')!.set('previous', tampered)
+
+    expect(await undoRestore(mine)).toBeUndefined()
+
+    expect(await loadVault()).toEqual(theirs)
   })
 
   it('never leaves the archive pointing at the vault that is now live', async () => {
@@ -170,7 +207,7 @@ describe('undoing a restore', () => {
     // open, and the lock screen offering to put back what is already there.
     store.set('vault', new Map([['previous', mine]]))
 
-    expect(await undoRestore()).toEqual(mine)
+    expect(await undoRestore(mine)).toEqual(mine)
     expect(await loadVault()).toEqual(mine)
     expect(await loadArchivedVault()).toBeUndefined()
   })
@@ -178,7 +215,7 @@ describe('undoing a restore', () => {
   it('does nothing when no restore was ever made', async () => {
     await saveVault(mine)
 
-    expect(await undoRestore()).toBeUndefined()
+    expect(await undoRestore(mine)).toBeUndefined()
     expect(await loadVault()).toEqual(mine)
   })
 
@@ -187,8 +224,7 @@ describe('undoing a restore', () => {
     // would put a whole encrypted vault — and a lock screen offering to open
     // it — in front of someone who just erased everything.
     await saveVault(mine)
-    await archiveCurrentVault()
-    await saveVault(theirs)
+    await restoreVault(theirs)
     await savePracticeMeta({ createdAt: t0, practiceCount: 3, lastPracticedAt: t0 + DAY })
 
     await deleteVault()
@@ -205,11 +241,9 @@ describe('undoing a restore', () => {
     // wrong restore is noticed, rather than saved up for later.
     const third = vaultRecord('salt-third', t0 + 2 * DAY)
     await saveVault(mine)
-    await archiveCurrentVault()
-    await saveVault(theirs)
-    await archiveCurrentVault()
-    await saveVault(third)
+    await restoreVault(theirs)
+    await restoreVault(third)
 
-    expect(await undoRestore()).toEqual(theirs)
+    expect(await undoRestore(theirs)).toEqual(theirs)
   })
 })

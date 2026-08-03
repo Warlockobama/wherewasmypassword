@@ -2,12 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { deriveKey } from '../crypto/kdf.ts'
 import { decryptVault, fromBase64, WrongPassphraseError, type VaultData } from '../crypto/vault.ts'
 import { parseBackup } from '../storage/backup.ts'
-import {
-  archiveCurrentVault,
-  loadArchivedVault,
-  saveVault,
-  type StoredVault,
-} from '../storage/db.ts'
+import { loadArchivedVault, restoreVault, type StoredVault } from '../storage/db.ts'
 import { clearPopupSession } from '../popup/session.ts'
 import { upgradeNeeded, upgradeOnUnlock } from './seal.ts'
 import { undoRestoreWithPassphrase } from './undo.ts'
@@ -51,8 +46,33 @@ export default function LockScreen({
       .catch(() => setArchived(null))
   }, [])
 
+  /**
+   * True while this screen is on the page.
+   *
+   * The undo now costs an Argon2id derive, so it is a second wide, and an
+   * unlock started alongside it can finish first and take this screen away.
+   * The swap it was running still lands on disk, and calling `onRestored` from
+   * there would tell an app that is already *unlocked* that the live record is
+   * now a different vault — leaving it holding one vault's key beside another
+   * vault's header, which the next credential save would write out as a record
+   * no passphrase can open. So the callback is not made after teardown: the
+   * app keeps the record it unlocked, and its next save is refused by
+   * `saveVault`'s salt check with "lock and unlock to continue", which is the
+   * outcome that loses nothing.
+   */
+  const live = useRef(true)
+  useEffect(() => {
+    live.current = true
+    return () => {
+      live.current = false
+    }
+  }, [])
+
   const unlock = async () => {
-    if (!phrase.trim() || busy) return
+    // Not while the undo is deriving: the two change the same vault from the
+    // same screen, and whichever lost the race would be acting on a record the
+    // other has already replaced.
+    if (!phrase.trim() || busy || undoBusy) return
     setBusy(true)
     setError(null)
     try {
@@ -67,6 +87,12 @@ export default function LockScreen({
       // phrase, and this is the only moment it is in hand (`decisions/0013`).
       setUpgrading(upgradeNeeded(stored) !== 'none')
       const brought = await upgradeOnUnlock(phrase, rawKey, data, stored)
+      if (!live.current) {
+        // An undo swapped the vault out from under this unlock and took the
+        // screen with it. The key opens a record that is no longer live.
+        brought.rawKey.fill(0)
+        return
+      }
       setPhrase('')
       onUnlock(brought.rawKey, data, brought.stored, brought.upgraded !== 'none')
     } catch (err) {
@@ -98,15 +124,19 @@ export default function LockScreen({
   const confirmRestore = async () => {
     if (!pendingRestore) return
     try {
-      await archiveCurrentVault()
-      await saveVault(pendingRestore)
+      // Setting aside and replacing in one transaction, so an undo in another
+      // tab cannot land between them and have its result overwritten — see
+      // `restoreVault`.
+      await restoreVault(pendingRestore)
       // Whatever a popup is holding belongs to the vault that was just replaced.
       // Its salt no longer matches, so it would be refused anyway; not leaving
       // it parked for five minutes is cheaper than reasoning about that.
       await clearPopupSession()
-      // `stored` is what was live a moment ago, which is what was just set
-      // aside — so the undo appears without a second trip to the database.
-      setArchived(stored)
+      // Read back rather than assuming `stored` is what was set aside: another
+      // context may have saved or re-keyed the live vault since this screen
+      // mounted, and the record the undo offers has to be the one on disk — it
+      // is what the passphrase gate will be asked to match.
+      setArchived((await loadArchivedVault()) ?? null)
       onRestored(pendingRestore)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -122,29 +152,63 @@ export default function LockScreen({
    * The operation underneath is a swap, not a replacement: whatever is live now
    * goes into the slot the archive just left, so a press costs a second press
    * rather than a vault. What the phrase buys is not safety from loss — that is
-   * `undoRestore`'s job — but the answer to *who*: this is the only vault-
-   * altering control reachable on a locked device, and without the gate a
-   * moment at someone's keyboard is enough to change which vault their machine
-   * opens (`decisions/0018`).
+   * `undoRestore`'s job — but the answer to *who*: without the gate a moment at
+   * someone's keyboard is enough to change which vault their machine opens
+   * (`decisions/0018`).
+   *
+   * It is the vault-altering control on this screen that costs nothing but a
+   * press. Restoring is the other one, and it is not gated — it needs a backup
+   * file brought to the machine, which is a higher bar but not an authenticated
+   * one, and doing it twice overwrites the archive slot for good. Whether that
+   * one should be gated too is `decisions/0019`.
    */
   const confirmUndo = async () => {
-    if (!archived || !undoPhrase.trim() || undoBusy) return
+    // Not while an unlock is deriving, for the reason `unlock` will not start
+    // while this one is: they are two slow operations on the same vault, and
+    // the loser acts on a record the winner has already replaced.
+    if (!archived || !undoPhrase.trim() || undoBusy || busy) return
     setUndoBusy(true)
     setUndoError(null)
     try {
       const back = await undoRestoreWithPassphrase(undoPhrase, archived)
-      setUndoPhrase('')
-      setConfirmingUndo(false)
       if (!back) {
-        // Nothing was set aside after all — another context consumed it.
-        setArchived(null)
+        // The archive slot no longer holds the record this screen proved: a
+        // restore or an undo in another context changed it while the derive
+        // was running. Nothing has been swapped, and saying so matters — a
+        // panel that simply vanished after a second of waiting would leave the
+        // user unable to tell whether it had done something.
+        const stillAside = await loadArchivedVault().catch(() => undefined)
+        setUndoPhrase('')
+        setArchived(stillAside ?? null)
+        const changed = 'The vault set aside changed while you were typing, so nothing was swapped.'
+        if (stillAside) {
+          setUndoError(`${changed} Check the date above before trying again.`)
+        } else {
+          // The offer is about to disappear with the panel, so the message has
+          // to move somewhere that will still be on screen.
+          setConfirmingUndo(false)
+          setError(`${changed} There is nothing set aside now.`)
+        }
         return
       }
-      // The swap moved the vault that was live into the archive slot, so the
-      // offer stays on screen, now pointing the other way.
-      setArchived(stored)
-      await clearPopupSession()
-      onRestored(back)
+      // The swap has happened on disk, and from here nothing may throw. An
+      // error now would close the panel over a screen still showing the vault
+      // that was replaced — the user would type the right phrase for what is
+      // in front of them and be told it is wrong, which is the exact minute
+      // `decisions/0018` exists to prevent. So both fallible calls are
+      // best-effort, and `onRestored` always runs.
+      await clearPopupSession().catch(() => {})
+      // What is set aside now is the vault that was live a moment ago. Read it
+      // back rather than assuming it is `stored`, which can be out of date.
+      const nowAside = await loadArchivedVault().catch(() => undefined)
+      setUndoPhrase('')
+      setConfirmingUndo(false)
+      setArchived(nowAside ?? null)
+      // Not after teardown: see `live`. An unlock that finished first has taken
+      // this screen away, and telling an unlocked app that the live record is
+      // now a different vault is how it ends up holding one vault's key beside
+      // another's header.
+      if (live.current) onRestored(back)
     } catch (err) {
       setUndoError(
         err instanceof WrongPassphraseError
@@ -193,7 +257,7 @@ export default function LockScreen({
             spellCheck={false}
             className="w-full rounded-lg border-2 border-dusk/40 bg-parchment px-3 py-2 text-center font-display text-lg tracking-wide focus:border-amber-glow focus:outline-none"
           />
-          <Button onClick={() => void unlock()} disabled={!phrase.trim() || busy}>
+          <Button onClick={() => void unlock()} disabled={!phrase.trim() || busy || undoBusy}>
             {busy ? 'Deriving key…' : 'Unlock'}
           </Button>
         </form>
@@ -287,7 +351,7 @@ export default function LockScreen({
               <Button
                 className="!border-brick !bg-brick"
                 onClick={() => void confirmUndo()}
-                disabled={!undoPhrase.trim() || undoBusy}
+                disabled={!undoPhrase.trim() || undoBusy || busy}
               >
                 {undoBusy ? 'Deriving key…' : 'Put the previous vault back'}
               </Button>

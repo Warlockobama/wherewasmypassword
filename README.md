@@ -116,9 +116,17 @@ you can't hide something in a drawer and open it later. The illustrated house ca
   that cannot be anchored, the unlocked screen shows when the vault was last changed: a
   date you do not recognise is the signal (`decisions/0016`). The lock screen's offer to
   put the previous vault back asks for *that* vault's passphrase first and swaps nothing
-  until it opens it — it is the only vault-altering control on a locked device, and
-  otherwise a moment at your keyboard would be enough to change which vault your machine
-  opens (`decisions/0018`).
+  until it opens it — otherwise a moment at your keyboard would be enough to change which
+  vault your machine opens (`decisions/0018`).
+
+- **Restoring a backup is still not gated, and a locked screen offers it.** The undo above
+  now asks for a passphrase; restore does not, because it never has been able to — a
+  backup file's phrase is not something this device knows. It is a higher bar than a
+  single press (someone has to bring a file) but not an authenticated one, and there is
+  one slot for the vault set aside: restoring twice overwrites it, and the vault this
+  device started with is gone from disk with no other copy. Keep your own export
+  somewhere else; the open question of whether this screen should ask for something
+  first is `decisions/0019`.
 
 **Known limitation:** Copy remains the fallback for pages autofill cannot reach, and is
 only offered in the full tab. It clears the clipboard 30 seconds after you return to that

@@ -101,15 +101,29 @@ export async function saveVault(record: StoredVault, expecting?: StoredVault): P
 }
 
 /**
- * Copy the current vault aside before something overwrites it (a restore).
+ * Replace the live vault with `incoming`, setting the outgoing one aside.
+ *
  * Restoring the wrong file would otherwise destroy the only copy, and the
  * archived record is still ciphertext — it is no more sensitive than the live
  * one, and it is the difference between a mistake and a permanent loss.
+ *
+ * One transaction, and that is the whole reason this function exists rather
+ * than the archive-then-save pair it replaces. Between those two writes the
+ * archive slot holds the vault that is *still live*, and `undoRestore` in
+ * another tab can swap underneath: the undo puts the proven vault back, then
+ * this restore's second write drops the new vault on top of it and the vault
+ * whose passphrase was just proven is gone from disk with no other copy. The
+ * gate in `vault/undo.ts` closed the read side of that second-wide window
+ * (`decisions/0018`); this is the write side, and a gate the write side can
+ * walk around is not a gate.
  */
-export async function archiveCurrentVault(): Promise<void> {
+export async function restoreVault(incoming: StoredVault): Promise<void> {
   const database = await db()
-  const current = await database.get('vault', VAULT_KEY)
-  if (current) await database.put('vault', current, PREVIOUS_VAULT_KEY)
+  const tx = database.transaction('vault', 'readwrite')
+  const current = await tx.store.get(VAULT_KEY)
+  if (current) await tx.store.put(current, PREVIOUS_VAULT_KEY)
+  await tx.store.put(incoming, VAULT_KEY)
+  await tx.done
 }
 
 export async function loadArchivedVault(): Promise<StoredVault | undefined> {
@@ -151,13 +165,19 @@ export async function undoRestore(
    * wide. Authorising one vault and putting back a different one is exactly
    * what the gate in `vault/undo.ts` exists to prevent, so the check
    * belongs inside the transaction that does the swap.
+   *
+   * Required, not optional. It was optional for one commit, which meant the
+   * "nothing in the UI may call this directly" above was a comment the compiler
+   * would never enforce — a future caller writing `undoRestore()` would get the
+   * ungated swap and a clean build. Now the only way to reach this is to hold a
+   * record you have something to say about.
    */
-  expecting?: StoredVault,
+  expecting: StoredVault,
 ): Promise<StoredVault | undefined> {
   const database = await db()
   const tx = database.transaction('vault', 'readwrite')
   const archived = await tx.store.get(PREVIOUS_VAULT_KEY)
-  if (!archived || (expecting && !sameRecord(archived, expecting))) {
+  if (!archived || !sameRecord(archived, expecting)) {
     await tx.done
     return undefined
   }
@@ -173,12 +193,42 @@ export async function undoRestore(
 }
 
 /**
- * Whether two records are the same vault record. The IV is fresh random bytes
- * on every write, so ciphertext and IV together identify one write of one
- * vault; the salt is compared as well so a re-key can never look like a match.
+ * Whether two records are the same vault record, header and all.
+ *
+ * Ciphertext and IV alone would identify one write of one vault — the IV is
+ * fresh random bytes every time — and that is all the first version compared.
+ * The header is compared too because the caller's claim is "I opened this
+ * record", and what it opened was the header as much as the body: the salt and
+ * KDF parameters are the derive's inputs, and since `decisions/0014` the whole
+ * header is bound into the ciphertext as additional data.
+ *
+ * The record it rules out: same ciphertext, same IV, `memoryKiB` rewritten to
+ * something no browser will run. Anyone who can write the archive slot can
+ * write that, the proof upstream would derive against the sane parameters held
+ * in memory and succeed, and the swap would install the tampered header as the
+ * live vault — leaving a vault that no passphrase can open, from a press whose
+ * whole purpose was to prove one.
  */
 function sameRecord(a: StoredVault, b: StoredVault): boolean {
-  return a.salt === b.salt && a.iv === b.iv && a.ciphertext === b.ciphertext
+  return (
+    a.version === b.version &&
+    a.salt === b.salt &&
+    a.iv === b.iv &&
+    a.ciphertext === b.ciphertext &&
+    a.createdAt === b.createdAt &&
+    a.updatedAt === b.updatedAt &&
+    sameKdfParams(a.kdfParams, b.kdfParams)
+  )
+}
+
+/** Field by field, because these are the derive's inputs and part of the AAD. */
+function sameKdfParams(a: KdfParams, b: KdfParams): boolean {
+  return (
+    a.algorithm === b.algorithm &&
+    a.memoryKiB === b.memoryKiB &&
+    a.iterations === b.iterations &&
+    a.parallelism === b.parallelism
+  )
 }
 
 /**

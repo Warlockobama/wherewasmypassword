@@ -55,9 +55,7 @@ vi.mock('idb', () => ({
   }),
 }))
 
-const { archiveCurrentVault, loadArchivedVault, loadVault, saveVault } = await import(
-  '../storage/db.ts'
-)
+const { loadArchivedVault, loadVault, restoreVault, saveVault } = await import('../storage/db.ts')
 const { undoRestoreWithPassphrase } = await import('./undo.ts')
 
 const t0 = 1700000000000
@@ -107,8 +105,7 @@ beforeEach(async () => {
   theirs = await sealed(THEIRS, 'theirs', t0 + 1000)
   // What a restore leaves behind: the outgoing vault set aside, the new one live.
   await saveVault(mine)
-  await archiveCurrentVault()
-  await saveVault(theirs)
+  await restoreVault(theirs)
 })
 
 describe('putting the previous vault back', () => {
@@ -147,7 +144,11 @@ describe('putting the previous vault back', () => {
     // stops before the swap.
     const absurd = { ...mine, kdfParams: { ...TEST_KDF, memoryKiB: 2 * 1024 * 1024 } }
 
-    await expect(undoRestoreWithPassphrase(MINE, absurd)).rejects.toThrow()
+    // Named, not merely "threw": the point is that `deriveKey` refused the
+    // parameters, and any other error passing here would hide that it did not.
+    await expect(undoRestoreWithPassphrase(MINE, absurd)).rejects.toThrow(
+      /unsupported key-derivation settings/,
+    )
 
     expect(await loadVault()).toEqual(theirs)
     expect(await loadArchivedVault()).toEqual(mine)
