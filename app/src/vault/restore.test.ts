@@ -56,6 +56,11 @@ vi.mock('idb', () => ({
       store: objectStore(Array.isArray(name) ? name[0] : name),
       objectStore,
       done: Promise.resolve(),
+      // `saveVault` aborts to refuse a write. Nothing in this file reaches that
+      // today — the refusals here come from `restore.ts`'s own gate — but
+      // without it the first test that does would die on `tx.abort is not a
+      // function` instead of on its own assertion.
+      abort: () => {},
     }),
   }),
 }))

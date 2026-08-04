@@ -38,6 +38,11 @@ none of them looked at.
   weakened by it. Every other writer of the vault record — `ChangePassphrase`,
   `upgradeOnUnlock`, credential saves — passes `expecting` and is refused when
   the salt has moved.
+  **[Corrected 2026-08-04: that last sentence was wrong. Only credential saves
+  passed `expecting`; `ChangePassphrase` and `upgradeOnUnlock` went through
+  `rekeyVault`, which had no such argument, and wrote unconditionally. Both
+  could destroy a vault with no copy kept, by the same mechanism this doc is
+  about. See the adversarial review at the end — they are fixed there.]**
 - It needs the user's own second tab, or a second window they forgot about. It
   is a foot-gun rather than an attacker's path: nobody else can make tab B
   finish a tutorial.
@@ -75,3 +80,45 @@ vault leaves the first vault exactly where it was.
 ## RESOLUTION (user call, 2026-08-04 — via exec assistant)
 
 1. **Decision:** James said "go with that" to the recommended default. Onboarding must refuse creating a vault when one already exists, with an "you already have a vault" style message. This prevents silent overwrite and preserves the existing vault unchanged; add a test ensuring a second create attempt leaves the first vault intact.
+
+## Implemented (2026-08-04)
+
+`saveVault`'s `expecting` grows a second form. It was a record — "this vault,
+still under the key I found it under", answered by a salt comparison. It is now
+that record *or* `'no-vault'`, answered by whether the slot holds anything at
+all, and both are checked inside the write transaction as before. The create
+path could not have used the salt form: a vault sealed at the end of a tutorial
+has a brand-new salt by definition, so every record already on disk looks like
+somebody else's and there is nothing to compare against. A refusal raises
+`VaultAlreadyExistsError` — its own class, because the answer differs from
+`VaultSupersededError`'s "lock and unlock to continue": there is nothing to
+re-read, the vault here is simply not the one you just built.
+
+`rekeyVault` is the one door onto that write and is shared by all three things
+that re-key — creating a vault, changing the passphrase, upgrading an old
+vault's KDF settings — so it now has to be told which it is, as a required
+argument with no default. That is deliberate in the same way `restoreVault`'s
+`authorize` is: a future create path written as `rekeyVault(phrase, data, now)`
+would otherwise compile straight into the unconditional overwrite this exists to
+prevent, and the reasoning would be a rule nothing enforces.
+
+`CreateVault` reports the refusal on a panel of its own with no "try again",
+because trying again is the thing that must not happen, and offers the vault
+that does exist instead — `App` clears the training material and routes that tab
+to the lock screen, carrying the practice schedule the other tab wrote rather
+than inventing a fresh one. The walk is lost, which is real; the phrase is in
+the user's head and the vault is untouched.
+
+**One thing found while building it.** The derive happens before the write is
+refused, so a refusal that merely threw would leave a live vault key — derived
+from a phrase the user has just been told to let go of — sitting in the heap of
+a screen they are about to walk away from. `rekeyVault` now zeroes it on any
+failure of the save, refusal or otherwise, and that is tested by wrapping the
+real `deriveKey` and reading the buffer back afterwards.
+
+**Gates:** `npm test` 218 passed, nine of them new here (five in `db.test.ts`
+for what a write may land on — two of which pin the pre-existing salt check,
+which had no coverage at all; four in `seal.test.ts` for the create path, one of
+them the key wipe above).
+`npm run build` clean, `npm run visual` all passed, `npm run autofill` 42/42.
+Each new guard test was also run with its guard disabled and confirmed to fail.

@@ -40,10 +40,12 @@ vi.mock('idb', () => ({
       store: objectStore(Array.isArray(name) ? name[0] : name),
       objectStore,
       done: Promise.resolve(),
-      // Every `abort` in `db.ts` is reached before that transaction has written
-      // anything, so a real rollback has nothing to undo and a no-op stands in
-      // for it exactly. What the tests below check is the same thing either
-      // way: that the records on disk did not move.
+      // Every `abort` in `db.ts` is reached before that transaction has issued a
+      // write, so there is nothing for a real rollback to undo and a no-op is
+      // enough for what the tests below check: that the records on disk did not
+      // move. It does not stand in for the whole of `abort` — a real one also
+      // rejects `tx.done`, which is why `db.ts` swallows that rejection, and
+      // nothing here would notice if it stopped.
       abort: () => {},
     }),
   }),
@@ -143,8 +145,12 @@ describe('practice metadata on disk', () => {
  *
  * Without that, two tabs of a fresh install each finishing their own memory
  * house ended with the second writing over the first — no archive, no undo,
- * nothing to offer back. Every test here is really the one assertion: after a
- * refusal, what was on disk is still on disk.
+ * nothing to offer back.
+ *
+ * The refusals are what this is for, and each asserts that what was on disk is
+ * still on disk. The two that let a write through are here as the other half of
+ * the pair: a guard that refused everything would pass every negative test and
+ * break onboarding and every credential save.
  */
 describe('what a vault write may land on', () => {
   const mine = vaultRecord('salt-mine', t0)
@@ -155,16 +161,18 @@ describe('what a vault write may land on', () => {
 
     await expect(saveVault(theirs, 'no-vault')).rejects.toBeInstanceOf(VaultAlreadyExistsError)
 
-    // The first vault exactly where it was — the same record, not a rewritten
-    // equal of it, which is the difference between "your walk was wasted" and
-    // "your vault is gone".
+    // The first vault exactly where it was. `toBe` because this store hands
+    // back the object it was given: real IndexedDB structured-clones, so
+    // identity is a property of the stand-in rather than of production — what
+    // it buys is that a rewrite with equal contents would still be caught here.
     expect(await loadVault()).toBe(mine)
   })
 
   it('keeps nothing aside when it refuses, because it displaced nothing', async () => {
-    // A refused create is not a quiet restore. Spending the archive slot here
-    // would throw away whatever an earlier restore set aside — and the lock
-    // screen's undo with it — to record a write that never happened.
+    // A refused create is not a quiet restore. `saveVault` touches the archive
+    // slot on no path at all today, so this is a forward pin rather than a
+    // demonstration: the day someone reaches for "archive it instead" (which
+    // `0020` considered and James turned down) it should fail here first.
     await saveVault(mine)
     await restoreVault(theirs, allowed)
 
@@ -208,6 +216,23 @@ describe('what a vault write may land on', () => {
     await saveVault(edited, mine)
 
     expect(await loadVault()).toEqual(edited)
+  })
+
+  it('refuses an update onto an empty slot rather than resurrecting the vault', async () => {
+    // "Delete vault & start over" in one tab leaves any other unlocked tab
+    // holding a key to a record that is gone. Its next credential save would
+    // put that whole vault back — its credentials, and the phrase the user was
+    // walking away from — on a device they had just cleared. And with
+    // `decisions/0020` in place the resurrected vault then refuses the tutorial
+    // they went to the welcome screen to start.
+    await saveVault(mine)
+    await deleteVault()
+
+    await expect(saveVault(vaultRecord('salt-mine', t0 + DAY), mine)).rejects.toBeInstanceOf(
+      VaultSupersededError,
+    )
+
+    expect(await loadVault()).toBeUndefined()
   })
 })
 

@@ -15,6 +15,14 @@ import { saveVault, type StoredVault, type VaultPrecondition } from '../storage/
  * format: `version` is always stamped to the current one, and the header the
  * ciphertext is bound to is always the header that gets stored beside it. The
  * two travelling together is what makes the binding in `decisions/0014` hold.
+ *
+ * `expecting` is optional here and required on `rekeyVault`, which is a real
+ * gap rather than an oversight worth writing down: `sealVault(key, data,
+ * header)` and `saveVault(record)` both still compile into an unconditional
+ * write. What `rekeyVault` closes is the re-key door, where every caller
+ * derives a fresh salt and so cannot be caught by the check below. A caller
+ * that keeps its key has the record in hand and no reason not to pass it; that
+ * is convention, not a compiler's promise.
  */
 export async function sealVault(
   rawKey: Uint8Array,
@@ -68,26 +76,37 @@ export async function sealVault(
  * re-keying to the *same* passphrase produces an unrelated key.
  *
  * Which is also why `purpose` is not optional. Those three share everything
- * except what they are allowed to land on, and a fresh salt is exactly the thing
- * `saveVault`'s ordinary check cannot judge.
+ * except what they are allowed to land on, and until `decisions/0020` none of
+ * them said: every re-key was an unconditional write over whatever was in the
+ * slot.
  */
 export async function rekeyVault(
   passphrase: string,
   data: VaultData,
   createdAt: number,
   /**
-   * What this re-key is: `'create'` seals the first vault on a device and is
-   * refused with `VaultAlreadyExistsError` if one is already there
-   * (`decisions/0020`); `'replace'` is a passphrase change or a KDF upgrade,
-   * which mean to write over the vault they just re-keyed.
+   * What this re-key is allowed to land on.
    *
-   * Required, and not defaulted to `'replace'`, for the reason `restoreVault`'s
-   * `authorize` is required: a future create path written as
-   * `rekeyVault(phrase, data, now)` would otherwise compile straight into the
-   * unconditional overwrite this argument exists to prevent, and the paragraph
-   * above would be a rule nothing enforces.
+   * `'create'` seals the first vault on a device and is refused with
+   * `VaultAlreadyExistsError` if one is already there (`decisions/0020`).
+   * `{ replacing }` is a passphrase change or a KDF upgrade, and names the
+   * record it means to write over — refused with `VaultSupersededError` if the
+   * vault on disk is no longer that one.
+   *
+   * Both callers of the second form judge the vault from a copy they read
+   * earlier: `ChangePassphrase` from the record open on screen, `upgradeOnUnlock`
+   * from the record the lock screen loaded at mount. A second tab can delete
+   * that vault and create or restore another inside either window, and an
+   * unconditional write then destroys a vault nobody meant to touch, with no
+   * archive and nothing to offer back. That is the same harm `0020` is about;
+   * the adversarial review found it one screen over.
+   *
+   * Required, with no default, for the reason `restoreVault`'s `authorize` is:
+   * a re-key written as `rekeyVault(phrase, data, now)` would otherwise compile
+   * straight into the unconditional overwrite this argument exists to prevent,
+   * and the paragraphs above would be a rule nothing enforces.
    */
-  purpose: 'create' | 'replace',
+  purpose: 'create' | { replacing: StoredVault },
   /** See `sealVault`. Passed only by the automatic KDF upgrade. */
   updatedAt?: number,
 ): Promise<{ rawKey: Uint8Array; stored: StoredVault }> {
@@ -104,7 +123,7 @@ export async function rekeyVault(
         createdAt,
         updatedAt,
       },
-      purpose === 'create' ? 'no-vault' : undefined,
+      purpose === 'create' ? 'no-vault' : purpose.replacing,
     )
   } catch (err) {
     // A key nobody will ever get back: the record it belongs to was not
@@ -164,7 +183,11 @@ export async function upgradeOnUnlock(
         passphrase,
         data,
         stored.createdAt,
-        'replace',
+        // The record the lock screen loaded when the page opened. A tab left
+        // sitting there while another deletes the vault and makes a new one
+        // would otherwise resurrect the old one over the top of it on the next
+        // successful unlock, which is a write nobody asked for.
+        { replacing: stored },
         stored.updatedAt,
       )
       // The old key is dead the moment the new record lands; do not leave its
@@ -174,14 +197,21 @@ export async function upgradeOnUnlock(
     }
     return {
       rawKey,
-      stored: await sealVault(rawKey, data, {
-        salt: stored.salt,
-        kdfParams: stored.kdfParams,
-        createdAt: stored.createdAt,
-        // Same reasoning as the rekey branch: a format rewrite changes the
-        // record, not what is in the vault.
-        updatedAt: stored.updatedAt,
-      }),
+      stored: await sealVault(
+        rawKey,
+        data,
+        {
+          salt: stored.salt,
+          kdfParams: stored.kdfParams,
+          createdAt: stored.createdAt,
+          // Same reasoning as the rekey branch: a format rewrite changes the
+          // record, not what is in the vault.
+          updatedAt: stored.updatedAt,
+        },
+        // And the same staleness as the rekey branch — this one keeps the key,
+        // but it is the same lock screen holding the same record from mount.
+        stored,
+      ),
       upgraded: 'format',
     }
   } catch {

@@ -54,6 +54,10 @@ vi.mock('idb', () => ({
       store: objectStore(Array.isArray(name) ? name[0] : name),
       objectStore,
       done: Promise.resolve(),
+      // `saveVault` aborts to refuse a write. Nothing here reaches that today,
+      // but without it the first test that does would die on `tx.abort is not a
+      // function` instead of on its own assertion.
+      abort: () => {},
     }),
   }),
 }))

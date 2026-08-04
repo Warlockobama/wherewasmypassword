@@ -117,12 +117,23 @@ export type VaultPrecondition = StoredVault | 'no-vault'
  * just told is dead. If they have let that phrase go, everything inside is lost.
  *
  * When `expecting` is `'no-vault'` the write is refused if there is anything in
- * the slot at all. That is onboarding's, and it is the one case where a salt
- * comparison would be no use: a vault sealed at the end of a tutorial has a
- * brand-new salt by definition, so every record on disk looks like somebody
- * else's. Two tabs of a fresh install, each finishing its own memory house,
- * ended with the second silently writing over the first — no archive, no undo,
- * nothing to offer back (`decisions/0020`).
+ * the slot at all. That is onboarding's. Two tabs of a fresh install, each
+ * finishing its own memory house, ended with the second silently writing over
+ * the first — no archive, no undo, nothing to offer back (`decisions/0020`).
+ *
+ * It is a distinct form rather than "pass the record you are writing" because
+ * of what it has to *say*, not what it computes. A vault sealed at the end of a
+ * tutorial has a brand-new salt by definition, so handing that record to the
+ * comparison above would refuse whenever anything is in the slot — the right
+ * answer, reached by leaning on salt uniqueness rather than on the thing being
+ * asserted, and reported as `VaultSupersededError`: "lock and unlock to
+ * continue", which is advice for a different problem. Nothing here is stale.
+ * There is simply already a vault.
+ *
+ * Both forms refuse an empty slot for a record `expecting`. The vault was
+ * deleted underneath a context still holding it, and letting that write through
+ * would put back — silently, with its own credentials and its own retired
+ * phrase — a vault the user erased on purpose.
  */
 export async function saveVault(record: StoredVault, expecting?: VaultPrecondition): Promise<void> {
   const database = await db()
@@ -133,10 +144,16 @@ export async function saveVault(record: StoredVault, expecting?: VaultPreconditi
     // and the write. A different salt means a different key.
     if (expecting === 'no-vault') {
       if (current) {
+        // `tx.done` exists from the moment the transaction was wrapped and is
+        // rejected by the abort. Nothing awaits it on this path — the caller
+        // gets the throw below instead — so without this the refusal, which is
+        // an ordinary outcome of onboarding, logs an unhandled AbortError.
+        void tx.done.catch(() => {})
         tx.abort()
         throw new VaultAlreadyExistsError()
       }
-    } else if (current && current.salt !== expecting.salt) {
+    } else if (!current || current.salt !== expecting.salt) {
+      void tx.done.catch(() => {})
       tx.abort()
       throw new VaultSupersededError()
     }

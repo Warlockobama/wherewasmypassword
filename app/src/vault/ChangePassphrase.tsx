@@ -103,9 +103,10 @@ export default function ChangePassphrase({
         newWords.join(' '),
         nextData,
         stored.createdAt,
-        // The vault this replaces is the one open on this screen; re-keying it
-        // is the whole point of being here.
-        'replace',
+        // The vault this replaces is the one open on this screen — and named,
+        // so that a second tab which deleted it and created another inside the
+        // minutes this flow takes gets a refusal rather than an overwrite.
+        { replacing: stored },
       )
       // Past this line the vault on disk is the new one and only the new phrase
       // opens it. Everything below is housekeeping, and none of it may be

@@ -26,12 +26,18 @@ export default function CreateVault({
   /**
    * Another copy of the UI sealed a vault on this device while this one was
    * still walking its memory house (`decisions/0020`). There is nothing to
-   * enter here, and the vault that exists is the one to open.
+   * enter here, and the vault that exists is the one to go to.
+   *
+   * Returns a promise because it has to read that vault off disk, and a read
+   * that fails leaves this screen the only thing on the page. Rejecting says so
+   * rather than leaving a button that silently does nothing.
    */
-  onExistingVault: () => void
+  onExistingVault: () => Promise<void>
 }) {
   const [status, setStatus] = useState<Status>('idle')
   const [detail, setDetail] = useState('')
+  const [leaving, setLeaving] = useState(false)
+  const [exitError, setExitError] = useState('')
   const [result, setResult] = useState<{ rawKey: Uint8Array; data: VaultData; stored: StoredVault } | null>(null)
 
   const create = async () => {
@@ -47,16 +53,31 @@ export default function CreateVault({
       // one refuses to land on a vault already there (`decisions/0020`).
       const { rawKey, stored } = await rekeyVault(words.join(' '), data, now, 'create')
 
-      setDetail('Saving to this browser…')
-      // Only after the vault itself landed. A refusal above must leave the
-      // other tab's practice schedule alone as well: resetting the ladder for a
-      // vault this screen did not create would be a smaller version of the same
-      // damage, and nothing would put it back.
-      await savePracticeMeta(freshPracticeMeta(now))
-      await requestPersistence()
-
+      // Past this line the vault exists and this phrase is the only thing that
+      // opens it, so nothing below may throw us onto the error screen: that
+      // screen offers "Try again", and a second create is now refused — by this
+      // tab's own vault. The user would be told another tab had made it and
+      // that the phrase they just learned guards nothing, which would be the
+      // exact opposite of the truth, at the one moment it costs the most. Same
+      // rule as the second half of a passphrase change.
       setResult({ rawKey, data, stored })
       setStatus('done')
+      try {
+        // Only after the vault itself landed. A refusal above must leave the
+        // other tab's practice schedule alone as well: resetting the ladder for
+        // a vault this screen did not create would be a smaller version of the
+        // same damage, and nothing would put it back.
+        await savePracticeMeta(freshPracticeMeta(now))
+      } catch {
+        // A missing schedule makes practice due immediately. Cosmetic beside a
+        // sealed vault the user can open.
+      }
+      try {
+        await requestPersistence()
+      } catch {
+        // A browser that will not promise persistence is exactly why the next
+        // screen presses a backup file on the user.
+      }
     } catch (err) {
       if (err instanceof VaultAlreadyExistsError) {
         setStatus('exists')
@@ -98,21 +119,44 @@ export default function CreateVault({
           </div>
         )}
         {/* No "try again": trying again is the thing that must not happen. The
-            only way out is the vault that is already here. */}
+            only way out is the vault that is already here. The copy says only
+            what the refusal actually knows — that a record is in the slot, not
+            how it got there. Another tab could have finished a tutorial, or
+            restored a backup from the welcome screen. */}
         {status === 'exists' && (
           <div className="space-y-3">
             <p className="font-semibold text-brick">This browser already has a vault.</p>
             <p className="text-sm">
-              Another tab or window finished setting one up while this one was open. Nothing was
-              saved here, and <strong>the vault already on this device is untouched</strong> — this
-              screen will not write over it.
+              Something else on this browser created or restored one while this screen was open.
+              Nothing was written here, and{' '}
+              <strong>the vault already on this device is untouched</strong> — this screen will not
+              write over it.
             </p>
             <p className="text-sm text-dusk/70">
               The phrase you just learned guards nothing, so let it go and use the one that vault was
-              made with. If you really did mean to start again, open the vault and use
-              &ldquo;Delete vault &amp; start over&rdquo; inside it.
+              made with. If you meant to start again, open that vault and use &ldquo;Delete vault
+              &amp; start over&rdquo; inside it — and if you cannot open it, the only way past it is
+              to clear this extension&apos;s data in your browser, which erases a vault nobody can
+              open anyway.
             </p>
-            <Button onClick={onExistingVault}>Open the vault on this device</Button>
+            <Button
+              disabled={leaving}
+              onClick={() => {
+                setExitError('')
+                setLeaving(true)
+                void onExistingVault().catch((err: unknown) => {
+                  setLeaving(false)
+                  setExitError(err instanceof Error ? err.message : String(err))
+                })
+              }}
+            >
+              {leaving ? 'Opening…' : 'Go to the vault on this device'}
+            </Button>
+            {exitError && (
+              <p className="text-sm text-brick">
+                Could not read the vault on this device: {exitError}. Reload the page to try again.
+              </p>
+            )}
           </div>
         )}
         {status === 'done' && result && (

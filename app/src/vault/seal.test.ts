@@ -16,14 +16,24 @@ const saved: StoredVault[] = []
 let saveFails = false
 /** What another context has already left in the vault slot, for the guard to see. */
 let onDisk: StoredVault | undefined
+/** Every precondition asked for, in order, so a caller that asks for none shows up. */
+const preconditions: (StoredVault | 'no-vault' | undefined)[] = []
 class FakeAlreadyExists extends Error {}
+class FakeSuperseded extends Error {}
 vi.mock('../storage/db.ts', () => ({
   VaultAlreadyExistsError: FakeAlreadyExists,
+  VaultSupersededError: FakeSuperseded,
+  // The real check is transactional and lives in `storage/db.ts`, tested there.
+  // What this stand-in is for is which callers ask for it, and with what
+  // (`decisions/0020`) — so it refuses on the same terms.
   saveVault: async (record: StoredVault, expecting?: StoredVault | 'no-vault') => {
     if (saveFails) throw new Error('storage quota exceeded')
-    // The real check is transactional and lives in `storage/db.ts`; what matters
-    // here is which callers ask for it (`decisions/0020`).
-    if (expecting === 'no-vault' && onDisk) throw new FakeAlreadyExists()
+    preconditions.push(expecting)
+    if (expecting === 'no-vault') {
+      if (onDisk) throw new FakeAlreadyExists()
+    } else if (expecting && (!onDisk || onDisk.salt !== expecting.salt)) {
+      throw new FakeSuperseded()
+    }
     saved.push(record)
     onDisk = record
   },
@@ -108,6 +118,7 @@ const readBack = (record: StoredVault, rawKey: Uint8Array) =>
 beforeEach(() => {
   saved.length = 0
   derived.length = 0
+  preconditions.length = 0
   saveFails = false
   onDisk = undefined
 })
@@ -158,7 +169,10 @@ describe('sealing', () => {
 
 describe('re-keying', () => {
   it('derives under a fresh salt at the current parameters, and opens', async () => {
-    const { rawKey, stored } = await rekeyVault(PHRASE, data, oldVault.createdAt, 'replace')
+    onDisk = oldVault
+    const { rawKey, stored } = await rekeyVault(PHRASE, data, oldVault.createdAt, {
+      replacing: oldVault,
+    })
     expect(stored.kdfParams).toEqual(DEFAULT_KDF_PARAMS)
     expect(stored.salt).not.toBe(oldVault.salt)
     expect(stored.version).toBe(2)
@@ -169,8 +183,9 @@ describe('re-keying', () => {
     // The salt is what makes this true, and it is why "change your passphrase"
     // and "raise the settings" can be one code path without the second one
     // quietly being a no-op.
-    const a = await rekeyVault(PHRASE, data, oldVault.createdAt, 'replace')
-    const b = await rekeyVault(PHRASE, data, oldVault.createdAt, 'replace')
+    onDisk = oldVault
+    const a = await rekeyVault(PHRASE, data, oldVault.createdAt, { replacing: oldVault })
+    const b = await rekeyVault(PHRASE, data, oldVault.createdAt, { replacing: a.stored })
     expect(a.stored.salt).not.toBe(b.stored.salt)
     expect(Array.from(a.rawKey)).not.toEqual(Array.from(b.rawKey))
   }, 60_000)
@@ -182,9 +197,10 @@ describe('re-keying', () => {
  * Two tabs of a fresh install, or two tabs after "Delete vault & start over":
  * the second to finish its memory house used to write its vault over the first
  * with an unconditional put. Not set aside — gone, with no archive and nothing
- * for the lock screen to offer back. `rekeyVault` is the one door onto that
- * write, which is why it now has to be told which of the three things it is
- * doing.
+ * for the lock screen to offer back. `rekeyVault` is the door every re-key goes
+ * through, and each of the three arrives with a brand-new salt — the one thing
+ * `saveVault`'s ordinary check cannot judge — which is why it now has to say
+ * what it is allowed to land on.
  */
 describe('creating the first vault on a device', () => {
   it('refuses when this browser already has one, and writes nothing', async () => {
@@ -210,30 +226,68 @@ describe('creating the first vault on a device', () => {
       FakeAlreadyExists,
     )
 
-    expect(derived).toHaveLength(1)
-    expect(Array.from(derived[0])).toEqual(Array(32).fill(0))
+    // `at(-1)`, not `[0]`: this test derives exactly once today, and the next
+    // one added here should not have to know that.
+    expect(Array.from(derived.at(-1)!)).toEqual(Array(32).fill(0))
   }, 60_000)
 
   it('seals the vault when the slot is empty', async () => {
     const { rawKey, stored } = await rekeyVault(PHRASE, data, oldVault.createdAt, 'create')
 
     expect(saved).toEqual([stored])
+    expect(preconditions).toEqual(['no-vault'])
     expect(await readBack(stored, rawKey)).toEqual(data)
     // And the key the caller carries into the unlocked screen is a live one.
     expect(Array.from(rawKey)).not.toEqual(Array(32).fill(0))
   }, 60_000)
 
-  it('a passphrase change still writes over the vault it re-keyed', async () => {
-    // The other side of the same argument: `'replace'` means the vault on disk
-    // is the one being re-keyed, and refusing there would break the flow this
-    // guard has nothing to do with.
+  it('a passphrase change still writes over the vault it named', async () => {
+    // The other side of the same argument: a re-key that names the record it is
+    // replacing must go through when that is still the record on disk, or the
+    // guard would have broken the flow it has nothing to do with.
     onDisk = oldVault
 
-    const { stored } = await rekeyVault(PHRASE, data, oldVault.createdAt, 'replace')
+    const { stored } = await rekeyVault(PHRASE, data, oldVault.createdAt, { replacing: oldVault })
 
     expect(saved).toEqual([stored])
+    expect(preconditions).toEqual([oldVault])
     expect(onDisk).toBe(stored)
   }, 60_000)
+
+  it('refuses a passphrase change onto a vault that was swapped underneath it', async () => {
+    // The half the first cut of `0020` missed. `ChangePassphrase` walks the user
+    // through placement and quizzes — minutes — holding the record it read at
+    // the start, and another tab can delete that vault and create or restore
+    // another inside that window. The unconditional write destroyed it with no
+    // archive, which is the same harm one screen over.
+    const somebodyElses = { ...oldVault, salt: 'YW5vdGhlci1zYWx0LWVudGlyZWx5' }
+    onDisk = somebodyElses
+
+    await expect(
+      rekeyVault(PHRASE, data, oldVault.createdAt, { replacing: oldVault }),
+    ).rejects.toBeInstanceOf(FakeSuperseded)
+
+    expect(saved).toHaveLength(0)
+    expect(onDisk).toBe(somebodyElses)
+    // And the key for the vault that was never written does not linger.
+    expect(Array.from(derived.at(-1)!)).toEqual(Array(32).fill(0))
+  }, 60_000)
+
+  it('forwards a record precondition from a caller that keeps its key', async () => {
+    // Credential saves do not re-key; they seal under the existing header and
+    // pass the record they read. Nothing else in this suite covers that the
+    // precondition survives `sealVault` on its way to storage.
+    onDisk = oldVault
+
+    await sealVault(
+      new Uint8Array(32).fill(1),
+      data,
+      { salt: oldVault.salt, kdfParams: WEAK_KDF, createdAt: oldVault.createdAt },
+      oldVault,
+    )
+
+    expect(preconditions).toEqual([oldVault])
+  })
 })
 
 describe('bringing a vault forward at unlock', () => {
@@ -251,10 +305,13 @@ describe('bringing a vault forward at unlock', () => {
         new TextEncoder().encode(JSON.stringify(data)),
       ),
     )
-    return {
-      rawKey,
-      stored: { ...oldVault, iv: toBase64(iv), ciphertext: toBase64(ciphertext) },
-    }
+    const stored = { ...oldVault, iv: toBase64(iv), ciphertext: toBase64(ciphertext) }
+    // It is the vault on this device, so put it in the slot. Until the guard
+    // reached this path the slot could stay empty and every upgrade still wrote
+    // — which is exactly how an upgrade with the wrong precondition passed the
+    // whole suite.
+    onDisk = stored
+    return { rawKey, stored }
   }
 
   it('re-keys an old vault in place, and the result opens with the same phrase', async () => {
@@ -309,9 +366,11 @@ describe('bringing a vault forward at unlock', () => {
 
   it('rewrites the format without re-deriving when only the format is behind', async () => {
     const current = { ...oldVault, kdfParams: DEFAULT_KDF_PARAMS }
+    onDisk = current
     const rawKey = new Uint8Array(32).fill(5)
     const brought = await upgradeOnUnlock(PHRASE, rawKey, data, current)
     expect(brought.upgraded).toBe('format')
+    expect(preconditions).toEqual([current])
     // Same key, same salt: nothing was stretched, which is why this path can
     // afford to run on a vault that is only a format behind.
     expect(brought.rawKey).toBe(rawKey)
@@ -334,6 +393,7 @@ describe('bringing a vault forward at unlock', () => {
     // no reason to bounce them off their own vault. It retries next unlock.
     saveFails = true
     const current = { ...oldVault, kdfParams: DEFAULT_KDF_PARAMS }
+    onDisk = current
     const rawKey = new Uint8Array(32).fill(5)
     const brought = await upgradeOnUnlock(PHRASE, rawKey, data, current)
     expect(brought.upgraded).toBe('none')
@@ -342,5 +402,53 @@ describe('bringing a vault forward at unlock', () => {
     // And the key they are carrying on with is still usable, not zeroed by a
     // half-finished re-key.
     expect(Array.from(rawKey)).not.toEqual(Array(32).fill(0))
+  })
+
+  it('a failed re-key hands back a key that still works, not a zeroed one', async () => {
+    // The branch above takes the `format` path, which never re-derives. This one
+    // reaches the re-key, where `rekeyVault` wipes the key it derived on any
+    // failure — the key it must NOT wipe is the caller's, which is still open on
+    // this session's vault.
+    const { stored, rawKey } = await buildOldVault()
+    saveFails = true
+
+    const brought = await upgradeOnUnlock(PHRASE, rawKey, data, stored)
+
+    expect(brought.upgraded).toBe('none')
+    expect(brought.rawKey).toBe(rawKey)
+    expect(await readBack(stored, brought.rawKey)).toEqual(data)
+  }, 60_000)
+
+  it('refuses to upgrade a vault that was replaced under the lock screen', async () => {
+    // The lock screen holds the record it read when the page opened, and never
+    // looks again. A tab left sitting there while another deletes the vault and
+    // creates a new one would, on the next successful unlock, write the old
+    // vault back over the new one — re-keyed, with no archive, nobody having
+    // asked for any of it. Silence is the right outcome: the user typed a phrase
+    // that opened the record this tab was holding, so let them in, and let the
+    // superseded check refuse the write.
+    const { stored, rawKey } = await buildOldVault()
+    const somebodyElses = { ...oldVault, salt: 'YW5vdGhlci1zYWx0LWVudGlyZWx5' }
+    onDisk = somebodyElses
+
+    const brought = await upgradeOnUnlock(PHRASE, rawKey, data, stored)
+
+    expect(brought.upgraded).toBe('none')
+    expect(saved).toHaveLength(0)
+    expect(onDisk).toBe(somebodyElses)
+  }, 60_000)
+
+  it('refuses a format rewrite onto a vault that was replaced under it', async () => {
+    // Same window, the cheaper branch: no re-derive, but the same stale record
+    // and the same unconditional write before this.
+    const current = { ...oldVault, kdfParams: DEFAULT_KDF_PARAMS }
+    const somebodyElses = { ...current, salt: 'YW5vdGhlci1zYWx0LWVudGlyZWx5' }
+    onDisk = somebodyElses
+
+    const brought = await upgradeOnUnlock(PHRASE, new Uint8Array(32).fill(5), data, current)
+
+    expect(brought.upgraded).toBe('none')
+    expect(saved).toHaveLength(0)
+    expect(onDisk).toBe(somebodyElses)
   })
 })
