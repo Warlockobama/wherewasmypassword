@@ -318,6 +318,29 @@ export default function App() {
             setUnlocked({ rawKey, data })
             setPhase('unlocked')
           }}
+          onExistingVault={() => {
+            // The create was refused because another tab got here first
+            // (`decisions/0020`). This tab's phrase and memory house guard
+            // nothing and never will, so they go the same way they do on a
+            // successful seal — and this tab joins the vault that does exist.
+            setWords([])
+            setAssociations([])
+            void (async () => {
+              const existing = await loadVault()
+              if (!existing) {
+                // Deleted between the refusal and this click. Nothing to open,
+                // and nothing left of the walk to seal: start over honestly
+                // rather than re-running a create with a half-forgotten phrase.
+                setPhase('welcome')
+                return
+              }
+              setStored(existing)
+              // The schedule belongs to the vault, and the tab that created it
+              // wrote one. Only invent a fresh one if there is none to read.
+              setMeta((await loadPracticeMeta()) ?? freshPracticeMeta(existing.createdAt))
+              setPhase('locked')
+            })()
+          }}
         />
       )
     case 'locked':

@@ -6,21 +6,29 @@ import {
   freshPracticeMeta,
   requestPersistence,
   savePracticeMeta,
+  VaultAlreadyExistsError,
   type StoredVault,
 } from '../storage/db.ts'
 import { rekeyVault } from './seal.ts'
 import { Button, Panel, Screen, Title } from '../ui.tsx'
 
-type Status = 'idle' | 'working' | 'done' | 'error'
+type Status = 'idle' | 'working' | 'done' | 'error' | 'exists'
 
 export default function CreateVault({
   words,
   associations,
   onDone,
+  onExistingVault,
 }: {
   words: string[]
   associations: Association[]
   onDone: (rawKey: Uint8Array, data: VaultData, stored: StoredVault) => void
+  /**
+   * Another copy of the UI sealed a vault on this device while this one was
+   * still walking its memory house (`decisions/0020`). There is nothing to
+   * enter here, and the vault that exists is the one to open.
+   */
+  onExistingVault: () => void
 }) {
   const [status, setStatus] = useState<Status>('idle')
   const [detail, setDetail] = useState('')
@@ -35,16 +43,25 @@ export default function CreateVault({
       const now = Date.now()
       const data: VaultData = { version: 1, words, associations, createdAt: now, entries: [] }
       // Same path as changing the passphrase and as raising an old vault's
-      // settings: derive under a fresh salt, encrypt, save.
-      const { rawKey, stored } = await rekeyVault(words.join(' '), data, now)
+      // settings: derive under a fresh salt, encrypt, save — except that this
+      // one refuses to land on a vault already there (`decisions/0020`).
+      const { rawKey, stored } = await rekeyVault(words.join(' '), data, now, 'create')
 
       setDetail('Saving to this browser…')
+      // Only after the vault itself landed. A refusal above must leave the
+      // other tab's practice schedule alone as well: resetting the ladder for a
+      // vault this screen did not create would be a smaller version of the same
+      // damage, and nothing would put it back.
       await savePracticeMeta(freshPracticeMeta(now))
       await requestPersistence()
 
       setResult({ rawKey, data, stored })
       setStatus('done')
     } catch (err) {
+      if (err instanceof VaultAlreadyExistsError) {
+        setStatus('exists')
+        return
+      }
       setDetail(err instanceof Error ? err.message : String(err))
       setStatus('error')
     }
@@ -78,6 +95,24 @@ export default function CreateVault({
           <div className="space-y-3">
             <p className="font-semibold text-brick">Something went wrong: {detail}</p>
             <Button onClick={() => void create()}>Try again</Button>
+          </div>
+        )}
+        {/* No "try again": trying again is the thing that must not happen. The
+            only way out is the vault that is already here. */}
+        {status === 'exists' && (
+          <div className="space-y-3">
+            <p className="font-semibold text-brick">This browser already has a vault.</p>
+            <p className="text-sm">
+              Another tab or window finished setting one up while this one was open. Nothing was
+              saved here, and <strong>the vault already on this device is untouched</strong> — this
+              screen will not write over it.
+            </p>
+            <p className="text-sm text-dusk/70">
+              The phrase you just learned guards nothing, so let it go and use the one that vault was
+              made with. If you really did mean to start again, open the vault and use
+              &ldquo;Delete vault &amp; start over&rdquo; inside it.
+            </p>
+            <Button onClick={onExistingVault}>Open the vault on this device</Button>
           </div>
         )}
         {status === 'done' && result && (

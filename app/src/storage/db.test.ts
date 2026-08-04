@@ -40,6 +40,11 @@ vi.mock('idb', () => ({
       store: objectStore(Array.isArray(name) ? name[0] : name),
       objectStore,
       done: Promise.resolve(),
+      // Every `abort` in `db.ts` is reached before that transaction has written
+      // anything, so a real rollback has nothing to undo and a no-op stands in
+      // for it exactly. What the tests below check is the same thing either
+      // way: that the records on disk did not move.
+      abort: () => {},
     }),
   }),
 }))
@@ -55,6 +60,8 @@ const {
   saveVault,
   saveVaultSettings,
   undoRestore,
+  VaultAlreadyExistsError,
+  VaultSupersededError,
 } = await import('./db.ts')
 
 /**
@@ -121,6 +128,86 @@ describe('practice metadata on disk', () => {
 
   it('returns undefined when there is nothing stored', async () => {
     expect(await loadPracticeMeta()).toBeUndefined()
+  })
+})
+
+/**
+ * What a write of the vault record is allowed to land on.
+ *
+ * Two different questions, and the second one is `decisions/0020`. A save that
+ * keeps the existing key asks "is the vault still keyed as I found it" — a salt
+ * comparison. A save that *creates* a vault cannot ask that: it has a brand-new
+ * salt by definition, so every record already on disk looks like somebody
+ * else's and there is nothing to compare against. It has to ask whether there is
+ * a record at all.
+ *
+ * Without that, two tabs of a fresh install each finishing their own memory
+ * house ended with the second writing over the first — no archive, no undo,
+ * nothing to offer back. Every test here is really the one assertion: after a
+ * refusal, what was on disk is still on disk.
+ */
+describe('what a vault write may land on', () => {
+  const mine = vaultRecord('salt-mine', t0)
+  const theirs = vaultRecord('salt-theirs', t0 + DAY)
+
+  it('refuses a create when this browser already has a vault', async () => {
+    await saveVault(mine)
+
+    await expect(saveVault(theirs, 'no-vault')).rejects.toBeInstanceOf(VaultAlreadyExistsError)
+
+    // The first vault exactly where it was — the same record, not a rewritten
+    // equal of it, which is the difference between "your walk was wasted" and
+    // "your vault is gone".
+    expect(await loadVault()).toBe(mine)
+  })
+
+  it('keeps nothing aside when it refuses, because it displaced nothing', async () => {
+    // A refused create is not a quiet restore. Spending the archive slot here
+    // would throw away whatever an earlier restore set aside — and the lock
+    // screen's undo with it — to record a write that never happened.
+    await saveVault(mine)
+    await restoreVault(theirs, allowed)
+
+    await expect(saveVault(vaultRecord('salt-third', t0), 'no-vault')).rejects.toBeInstanceOf(
+      VaultAlreadyExistsError,
+    )
+
+    expect(await loadVault()).toEqual(theirs)
+    expect(await loadArchivedVault()).toEqual(mine)
+  })
+
+  it('lets a create through on a browser with no vault', async () => {
+    // The ordinary first run, and the case after "Delete vault & start over".
+    await saveVault(mine, 'no-vault')
+
+    expect(await loadVault()).toEqual(mine)
+  })
+
+  it('refuses an update whose key moved under it', async () => {
+    // Another copy of the UI changed the passphrase while this caller held the
+    // record it read a minute ago. Letting the write through would put the
+    // vault back under the phrase the user was just told is dead.
+    await saveVault(mine)
+    const reKeyed = vaultRecord('salt-re-keyed', t0 + DAY)
+    await saveVault(reKeyed)
+
+    await expect(saveVault(vaultRecord('salt-mine', t0 + 2 * DAY), mine)).rejects.toBeInstanceOf(
+      VaultSupersededError,
+    )
+
+    expect(await loadVault()).toBe(reKeyed)
+  })
+
+  it('lets an update through while the key is still the one it read', async () => {
+    // A credential saved in another tab rewrites the ciphertext of the same
+    // vault. That is an ordinary race over contents — last write wins, as it
+    // always has — and not what the check is for.
+    await saveVault(mine)
+    const edited = vaultRecord('salt-mine', t0 + DAY)
+
+    await saveVault(edited, mine)
+
+    expect(await loadVault()).toEqual(edited)
   })
 })
 

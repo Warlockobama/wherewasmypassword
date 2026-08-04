@@ -78,9 +78,33 @@ export class VaultSupersededError extends Error {
 }
 
 /**
+ * A write that would have created a vault found one already there
+ * (`decisions/0020`).
+ *
+ * Distinct from `VaultSupersededError` because the answer is different. That one
+ * says "what you are holding is stale, open it again"; this one says "this
+ * device already has a vault, and it is not the one you just built". Nothing was
+ * written either way.
+ */
+export class VaultAlreadyExistsError extends Error {
+  constructor() {
+    super('This browser already has a vault. Open that one, or delete it before making another.')
+    this.name = 'VaultAlreadyExistsError'
+  }
+}
+
+/**
+ * What the caller believes is in the vault slot — either a record, meaning "this
+ * vault, still under the key I found it under", or `'no-vault'`, meaning nothing
+ * at all. Checked inside the write transaction, so nothing can land between the
+ * look and the write.
+ */
+export type VaultPrecondition = StoredVault | 'no-vault'
+
+/**
  * Write the vault record.
  *
- * When `expecting` is given, the write is refused if the salt on disk is no
+ * When `expecting` is a record, the write is refused if the salt on disk is no
  * longer the one the caller derived its key from. That is the difference
  * between two contexts racing over the *contents* — last write wins, as it
  * always has — and one of them quietly reverting a change of *key*.
@@ -91,15 +115,28 @@ export class VaultSupersededError extends Error {
  * would write is perfectly self-consistent, so it fails open rather than
  * closed — the vault silently goes back to opening with the phrase the user was
  * just told is dead. If they have let that phrase go, everything inside is lost.
+ *
+ * When `expecting` is `'no-vault'` the write is refused if there is anything in
+ * the slot at all. That is onboarding's, and it is the one case where a salt
+ * comparison would be no use: a vault sealed at the end of a tutorial has a
+ * brand-new salt by definition, so every record on disk looks like somebody
+ * else's. Two tabs of a fresh install, each finishing its own memory house,
+ * ended with the second silently writing over the first — no archive, no undo,
+ * nothing to offer back (`decisions/0020`).
  */
-export async function saveVault(record: StoredVault, expecting?: StoredVault): Promise<void> {
+export async function saveVault(record: StoredVault, expecting?: VaultPrecondition): Promise<void> {
   const database = await db()
   const tx = database.transaction('vault', 'readwrite')
   if (expecting) {
     const current = await tx.store.get(VAULT_KEY)
     // Compared inside the transaction, so nothing can land between the read
     // and the write. A different salt means a different key.
-    if (current && current.salt !== expecting.salt) {
+    if (expecting === 'no-vault') {
+      if (current) {
+        tx.abort()
+        throw new VaultAlreadyExistsError()
+      }
+    } else if (current && current.salt !== expecting.salt) {
       tx.abort()
       throw new VaultSupersededError()
     }

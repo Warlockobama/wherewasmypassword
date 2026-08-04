@@ -1,6 +1,6 @@
 # 0020 — Finishing onboarding in a second tab destroys a vault, with no copy kept
 
-**Status:** OPEN — recommended default at the bottom; nothing has been changed.
+**Status:** RESOLVED (user call, 2026-08-04) — see the resolution at the bottom.
 
 ## What prompted this
 
@@ -71,3 +71,7 @@ holding a vault someone restored over than one they created over.
 A pick. For the recommended one: an `expecting`-style refusal on the create
 path, a message on `CreateVault`, and a test that a second create over a live
 vault leaves the first vault exactly where it was.
+
+## RESOLUTION (user call, 2026-08-04 — via exec assistant)
+
+1. **Decision:** James said "go with that" to the recommended default. Onboarding must refuse creating a vault when one already exists, with an "you already have a vault" style message. This prevents silent overwrite and preserves the existing vault unchanged; add a test ensuring a second create attempt leaves the first vault intact.

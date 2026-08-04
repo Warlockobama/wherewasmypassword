@@ -6,7 +6,7 @@ import {
   toBase64,
   type VaultData,
 } from '../crypto/vault.ts'
-import { saveVault, type StoredVault } from '../storage/db.ts'
+import { saveVault, type StoredVault, type VaultPrecondition } from '../storage/db.ts'
 
 /**
  * The one place a vault record is written.
@@ -36,9 +36,9 @@ export async function sealVault(
    * The record this update was built from. Supplied by writes that mean to keep
    * the existing key, so that a stale context cannot overwrite a vault whose
    * key has changed under it; omitted by the writes that are themselves
-   * changing the key. See `saveVault`.
+   * changing the key. `'no-vault'` is onboarding's — see `saveVault`.
    */
-  expecting?: StoredVault,
+  expecting?: VaultPrecondition,
 ): Promise<StoredVault> {
   const blob = await encryptVault(rawKey, data, {
     salt: header.salt,
@@ -66,22 +66,54 @@ export async function sealVault(
  * the master passphrase (`decisions/0012`), and raising an old vault's key-
  * derivation settings (`decisions/0013`). The salt is always new, so even
  * re-keying to the *same* passphrase produces an unrelated key.
+ *
+ * Which is also why `purpose` is not optional. Those three share everything
+ * except what they are allowed to land on, and a fresh salt is exactly the thing
+ * `saveVault`'s ordinary check cannot judge.
  */
 export async function rekeyVault(
   passphrase: string,
   data: VaultData,
   createdAt: number,
+  /**
+   * What this re-key is: `'create'` seals the first vault on a device and is
+   * refused with `VaultAlreadyExistsError` if one is already there
+   * (`decisions/0020`); `'replace'` is a passphrase change or a KDF upgrade,
+   * which mean to write over the vault they just re-keyed.
+   *
+   * Required, and not defaulted to `'replace'`, for the reason `restoreVault`'s
+   * `authorize` is required: a future create path written as
+   * `rekeyVault(phrase, data, now)` would otherwise compile straight into the
+   * unconditional overwrite this argument exists to prevent, and the paragraph
+   * above would be a rule nothing enforces.
+   */
+  purpose: 'create' | 'replace',
   /** See `sealVault`. Passed only by the automatic KDF upgrade. */
   updatedAt?: number,
 ): Promise<{ rawKey: Uint8Array; stored: StoredVault }> {
   const salt = randomBytes(16)
   const rawKey = await deriveKey(passphrase, salt, DEFAULT_KDF_PARAMS)
-  const stored = await sealVault(rawKey, data, {
-    salt: toBase64(salt),
-    kdfParams: DEFAULT_KDF_PARAMS,
-    createdAt,
-    updatedAt,
-  })
+  let stored: StoredVault
+  try {
+    stored = await sealVault(
+      rawKey,
+      data,
+      {
+        salt: toBase64(salt),
+        kdfParams: DEFAULT_KDF_PARAMS,
+        createdAt,
+        updatedAt,
+      },
+      purpose === 'create' ? 'no-vault' : undefined,
+    )
+  } catch (err) {
+    // A key nobody will ever get back: the record it belongs to was not
+    // written, and the caller gets the error instead of this. Refusals are now
+    // an ordinary outcome of the create path, so leaving a live vault key in
+    // the heap of a screen the user is about to walk away from is not.
+    rawKey.fill(0)
+    throw err
+  }
   return { rawKey, stored }
 }
 
@@ -128,7 +160,13 @@ export async function upgradeOnUnlock(
       // rollback can be spotted. Since an old record is exactly the kind that
       // needs upgrading, stamping it now would print today's date on precisely
       // the planted vault that signal exists to catch (`decisions/0016`).
-      const rekeyed = await rekeyVault(passphrase, data, stored.createdAt, stored.updatedAt)
+      const rekeyed = await rekeyVault(
+        passphrase,
+        data,
+        stored.createdAt,
+        'replace',
+        stored.updatedAt,
+      )
       // The old key is dead the moment the new record lands; do not leave its
       // bytes lying in this heap waiting for a collector.
       rawKey.fill(0)

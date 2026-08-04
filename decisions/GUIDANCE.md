@@ -18,3 +18,4 @@
 - 2026-08-03 RESOLVED 0017-sweep-the-parked-key-at-its-deadline.md — 1. **Add the alarms permission and enforce deadline deletion**: James said "we'll go with that". Implement a one-shot al
 - 2026-08-03 RESOLVED 0018-how-long-the-undo-offer-should-live.md — 1. **Require passphrase to use undo-restore**: James said "go with the passphrase". The undo-restore swap must prompt fo
 - 2026-08-03 RESOLVED 0019-restore-on-a-locked-screen-is-ungated.md — 1. **Ruling:** "both, with a option to configure that behavior" — require a passphrase check for both the incoming backu
+- 2026-08-04 RESOLVED 0020-finishing-onboarding-twice-destroys-a-vault.md — 1. **Decision:** James said "go with that" to the recommended default. Onboarding must refuse creating a vault when one 

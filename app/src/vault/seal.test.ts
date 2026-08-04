@@ -14,12 +14,42 @@ import type { StoredVault } from '../storage/db.ts'
 // hit disk, header and all.
 const saved: StoredVault[] = []
 let saveFails = false
+/** What another context has already left in the vault slot, for the guard to see. */
+let onDisk: StoredVault | undefined
+class FakeAlreadyExists extends Error {}
 vi.mock('../storage/db.ts', () => ({
-  saveVault: async (record: StoredVault) => {
+  VaultAlreadyExistsError: FakeAlreadyExists,
+  saveVault: async (record: StoredVault, expecting?: StoredVault | 'no-vault') => {
     if (saveFails) throw new Error('storage quota exceeded')
+    // The real check is transactional and lives in `storage/db.ts`; what matters
+    // here is which callers ask for it (`decisions/0020`).
+    if (expecting === 'no-vault' && onDisk) throw new FakeAlreadyExists()
     saved.push(record)
+    onDisk = record
   },
 }))
+
+/**
+ * Real Argon2id, with the derived key kept where a test can look at it. The
+ * create path can now fail *after* deriving, and a key for a vault that will
+ * never exist must not be left sitting in the heap of a screen the user is
+ * about to walk away from.
+ *
+ * `vi.hoisted` because this file imports the real module for its own use, so
+ * the mock factory runs before an ordinary `const` on this line would exist.
+ */
+const derived = vi.hoisted(() => [] as Uint8Array[])
+vi.mock('../crypto/kdf.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../crypto/kdf.ts')>()
+  return {
+    ...actual,
+    deriveKey: async (...args: Parameters<typeof actual.deriveKey>) => {
+      const key = await actual.deriveKey(...args)
+      derived.push(key)
+      return key
+    },
+  }
+})
 
 const { sealVault, rekeyVault, upgradeNeeded, upgradeOnUnlock } = await import('./seal.ts')
 
@@ -77,7 +107,9 @@ const readBack = (record: StoredVault, rawKey: Uint8Array) =>
 
 beforeEach(() => {
   saved.length = 0
+  derived.length = 0
   saveFails = false
+  onDisk = undefined
 })
 
 describe('what a vault needs bringing forward to', () => {
@@ -126,7 +158,7 @@ describe('sealing', () => {
 
 describe('re-keying', () => {
   it('derives under a fresh salt at the current parameters, and opens', async () => {
-    const { rawKey, stored } = await rekeyVault(PHRASE, data, oldVault.createdAt)
+    const { rawKey, stored } = await rekeyVault(PHRASE, data, oldVault.createdAt, 'replace')
     expect(stored.kdfParams).toEqual(DEFAULT_KDF_PARAMS)
     expect(stored.salt).not.toBe(oldVault.salt)
     expect(stored.version).toBe(2)
@@ -137,10 +169,70 @@ describe('re-keying', () => {
     // The salt is what makes this true, and it is why "change your passphrase"
     // and "raise the settings" can be one code path without the second one
     // quietly being a no-op.
-    const a = await rekeyVault(PHRASE, data, oldVault.createdAt)
-    const b = await rekeyVault(PHRASE, data, oldVault.createdAt)
+    const a = await rekeyVault(PHRASE, data, oldVault.createdAt, 'replace')
+    const b = await rekeyVault(PHRASE, data, oldVault.createdAt, 'replace')
     expect(a.stored.salt).not.toBe(b.stored.salt)
     expect(Array.from(a.rawKey)).not.toEqual(Array.from(b.rawKey))
+  }, 60_000)
+})
+
+/**
+ * Onboarding sealing a vault over one that is already there (`decisions/0020`).
+ *
+ * Two tabs of a fresh install, or two tabs after "Delete vault & start over":
+ * the second to finish its memory house used to write its vault over the first
+ * with an unconditional put. Not set aside — gone, with no archive and nothing
+ * for the lock screen to offer back. `rekeyVault` is the one door onto that
+ * write, which is why it now has to be told which of the three things it is
+ * doing.
+ */
+describe('creating the first vault on a device', () => {
+  it('refuses when this browser already has one, and writes nothing', async () => {
+    onDisk = oldVault
+
+    await expect(rekeyVault(PHRASE, data, Date.now(), 'create')).rejects.toBeInstanceOf(
+      FakeAlreadyExists,
+    )
+
+    expect(saved).toHaveLength(0)
+    // The point of the whole exercise: the vault that was there is the vault
+    // that is there.
+    expect(onDisk).toBe(oldVault)
+  }, 60_000)
+
+  it('wipes the key it derived for a vault that will never exist', async () => {
+    // The derive happens before the write is refused, so a refusal that just
+    // threw would leave a live vault key in the heap of a screen the user is
+    // about to walk away from.
+    onDisk = oldVault
+
+    await expect(rekeyVault(PHRASE, data, Date.now(), 'create')).rejects.toBeInstanceOf(
+      FakeAlreadyExists,
+    )
+
+    expect(derived).toHaveLength(1)
+    expect(Array.from(derived[0])).toEqual(Array(32).fill(0))
+  }, 60_000)
+
+  it('seals the vault when the slot is empty', async () => {
+    const { rawKey, stored } = await rekeyVault(PHRASE, data, oldVault.createdAt, 'create')
+
+    expect(saved).toEqual([stored])
+    expect(await readBack(stored, rawKey)).toEqual(data)
+    // And the key the caller carries into the unlocked screen is a live one.
+    expect(Array.from(rawKey)).not.toEqual(Array(32).fill(0))
+  }, 60_000)
+
+  it('a passphrase change still writes over the vault it re-keyed', async () => {
+    // The other side of the same argument: `'replace'` means the vault on disk
+    // is the one being re-keyed, and refusing there would break the flow this
+    // guard has nothing to do with.
+    onDisk = oldVault
+
+    const { stored } = await rekeyVault(PHRASE, data, oldVault.createdAt, 'replace')
+
+    expect(saved).toEqual([stored])
+    expect(onDisk).toBe(stored)
   }, 60_000)
 })
 
