@@ -36,7 +36,7 @@
  */
 import { createServer } from 'node:http'
 import { existsSync } from 'node:fs'
-import { cp, readFile, writeFile, mkdir } from 'node:fs/promises'
+import { cp, readFile, writeFile, mkdir, rm } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { join, dirname, resolve } from 'node:path'
@@ -120,6 +120,24 @@ function rpc(ws, method, params = {}, sessionId) {
 }
 
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms))
+
+/**
+ * Throw away a directory this run created — a browser profile, or the scratch
+ * copy of the build. Each run made three and kept them all, which is how a temp
+ * directory ends up holding dozens of browser profiles belonging to a password
+ * manager's test suite. Best effort: Windows holds a profile locked for a moment
+ * after the browser exits, and tidying up is not worth failing a check over.
+ */
+async function discard(dir) {
+  for (let i = 0; i < 10; i++) {
+    try {
+      await rm(dir, { recursive: true, force: true })
+      return
+    } catch {
+      await sleep(300)
+    }
+  }
+}
 
 /**
  * Chromium derives an unpacked extension's ID from its absolute path: the
@@ -798,6 +816,7 @@ async function runSuite({ extDir, browser, port, label, hasGrant }) {
       /* already gone */
     }
     child.kill()
+    await discard(profile)
   }
   return results
 }
@@ -814,6 +833,7 @@ async function main() {
   const servers = await Promise.all([startServer(PORT), startServer(OTHER_PORT)])
   let shipped = []
   let granted = []
+  let scratch = null
   try {
     shipped = await runSuite({
       extDir: DIST,
@@ -822,7 +842,7 @@ async function main() {
       label: 'PASS 1 — the extension exactly as shipped',
       hasGrant: false,
     })
-    const scratch = await scratchBuildWithHostPermission()
+    scratch = await scratchBuildWithHostPermission()
     granted = await runSuite({
       extDir: scratch,
       browser,
@@ -834,6 +854,7 @@ async function main() {
     })
   } finally {
     servers.forEach((s) => s.close())
+    if (scratch) await discard(scratch)
   }
 
   const failed = [...build, ...shipped, ...granted].filter((r) => !r.passed)

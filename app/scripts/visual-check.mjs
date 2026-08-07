@@ -13,7 +13,7 @@
  * exception, a console error, a missing control, or a layout overflow.
  */
 import { createServer } from 'node:http'
-import { readFile, mkdir, writeFile } from 'node:fs/promises'
+import { readFile, mkdir, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { join, extname, dirname, resolve } from 'node:path'
@@ -82,6 +82,26 @@ function rpc(ws, method, params = {}, sessionId) {
 }
 
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms))
+
+/**
+ * Throw away the browser profile this run created.
+ *
+ * The run walks the whole of onboarding, so that profile holds a real sealed
+ * vault in a real IndexedDB. Leaving one behind on every run is how a temp
+ * directory ends up with a hundred of them — which is what it had. Best effort:
+ * Windows keeps the profile locked for a moment after the browser exits, and
+ * failing to tidy up is not worth failing a visual check over.
+ */
+async function discardProfile(dir) {
+  for (let i = 0; i < 10; i++) {
+    try {
+      await rm(dir, { recursive: true, force: true })
+      return
+    } catch {
+      await sleep(300)
+    }
+  }
+}
 
 async function waitForDevTools() {
   for (let i = 0; i < 60; i++) {
@@ -437,6 +457,7 @@ async function main() {
     }
     child.kill()
     server.close()
+    await discardProfile(profile)
   }
 
   console.log('')

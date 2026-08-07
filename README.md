@@ -156,6 +156,7 @@ npm run build  # production build in dist/ (web page + extension), CSP injected
 npm run visual # drives the whole onboarding in a real browser, screenshots each screen
 npm run autofill  # loads the packed extension in a real browser and tests the fill path
 npm run journey   # walks the entire product once, in the extension, as a user would
+npm run package   # build, zip dist/ into release/, print a SHA-256
 ```
 
 Most of `npm test` runs under `node` with no DOM. The screens are the exception:
@@ -206,11 +207,34 @@ a pre-seeded profile is discarded for an unpacked extension.
 
 ### Install as a browser extension
 
+**From a release** — no toolchain needed. Download
+`wherewasmypassword-<version>.zip` from
+[Releases](https://github.com/Warlockobama/wherewasmypassword/releases), check it
+against the SHA-256 in the release notes, unzip it, then open
+`chrome://extensions` (or `edge://extensions`), enable **Developer mode**, and
+**Load unpacked** → select the unzipped folder.
+
+**Two things to know before you rely on it.** It does not auto-update: a loaded
+zip stays exactly as it is until you download a newer one and load that. And the
+vault lives in the browser profile you create it in — not in the zip, and not
+anywhere else. Export an encrypted backup and keep it somewhere off this
+machine.
+
+Not being on the Chrome Web Store is a deliberate choice, not an oversight
+(`decisions/0022`): a store listing means auto-update, and for a password
+manager "whatever is signed and pushed reaches every installed vault silently"
+is a decision worth taking on its own rather than as a side effect of wanting an
+install link. It is deferred, not declined.
+
+**From a checkout**, if you have Node:
+
 1. `npm run build` in `app/`
 2. Open `chrome://extensions` (or `edge://extensions`), enable **Developer mode**
 3. **Load unpacked** → select `app/dist`
-4. Click the toolbar button — the popup opens; "Memory house" in it opens the full tab,
-   which is where you build the vault the first time
+
+Either way: click the toolbar button — the popup opens; "Memory house" in it
+opens the full tab, which is where you build the vault the first time.
+`RELEASE.md` is the checklist for cutting a new zip.
 
 The same `dist/` also works as a plain static site on any host; the extension wrapper is
 `public/manifest.json` + `public/background.js`. Vault data lives in the extension's own
