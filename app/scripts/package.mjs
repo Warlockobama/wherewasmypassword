@@ -34,7 +34,7 @@
 import { createHash } from 'node:crypto'
 import { deflateRawSync } from 'node:zlib'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join, dirname, resolve, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -107,7 +107,6 @@ async function main() {
       // Zip paths are forward-slashed on every platform, whatever the host uses.
       path: relative(DIST, file).split(sep).join('/'),
       body: await readFile(file),
-      mtime: (await stat(file)).mtime,
     })
   }
   const zip = buildZip(entries)
@@ -152,13 +151,19 @@ function crc32(buffer) {
   return (c ^ 0xffffffff) >>> 0
 }
 
-/** MS-DOS date and time, which is what the format stores. */
-function dosStamp(date) {
-  const time =
-    (date.getHours() << 11) | (date.getMinutes() << 5) | (Math.floor(date.getSeconds() / 2) & 0x1f)
-  const day = ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate()
-  return { time, day }
-}
+/**
+ * The MS-DOS date and time every entry is stamped with.
+ *
+ * Fixed, not each file's mtime, so that packaging the same `dist/` twice gives
+ * a byte-identical zip and therefore the same SHA-256. That is the whole point
+ * of publishing a checksum for a download that will never auto-update: someone
+ * who does not want to trust the file can rebuild from the tag and compare, and
+ * a checksum that changed with the clock would make that impossible.
+ *
+ * 1980-01-01 00:00 is the earliest the format can represent — the zero of the
+ * DOS epoch, and unmistakably a placeholder rather than a real build time.
+ */
+const FIXED_STAMP = { time: 0, day: (0 << 9) | (1 << 5) | 1 }
 
 function buildZip(entries) {
   const chunks = []
@@ -172,7 +177,7 @@ function buildZip(entries) {
     // compressed — and storing the larger of the two would be silly.
     const stored = compressed.length >= entry.body.length
     const body = stored ? entry.body : compressed
-    const { time, day } = dosStamp(entry.mtime)
+    const { time, day } = FIXED_STAMP
     const crc = crc32(entry.body)
 
     const local = Buffer.alloc(30)

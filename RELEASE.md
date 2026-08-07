@@ -49,6 +49,14 @@ commit anyone can check out, not a state of somebody's laptop.
    requests host permissions at all, or one carrying source maps. Those are not
    ceremony: a package is what reaches someone who will never read a manifest.
 
+   **The zip is reproducible.** Every entry is stamped 1980-01-01 rather than
+   with its mtime, so building the same commit twice gives a byte-identical
+   archive and the same SHA-256. That is what makes the published checksum
+   worth publishing: a stranger can check out the tag, run `npm run package`,
+   and compare, rather than taking our word for the file. If you ever change
+   the packaging, check that property still holds — package twice and diff the
+   hashes.
+
 5. **Load the zip itself — not `dist/`.** Unzip it somewhere else, open
    `edge://extensions` (or `chrome://extensions`), turn on Developer mode, and
    **Load unpacked** onto the unzipped folder. Everything up to here has tested

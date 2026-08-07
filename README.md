@@ -214,6 +214,10 @@ against the SHA-256 in the release notes, unzip it, then open
 `chrome://extensions` (or `edge://extensions`), enable **Developer mode**, and
 **Load unpacked** → select the unzipped folder.
 
+The zip is reproducible: check out the tag, run `npm run package` in `app/`, and
+you get a byte-identical archive with the same SHA-256. You do not have to take
+our word for what is in the download.
+
 **Two things to know before you rely on it.** It does not auto-update: a loaded
 zip stays exactly as it is until you download a newer one and load that. And the
 vault lives in the browser profile you create it in — not in the zip, and not
