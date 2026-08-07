@@ -155,7 +155,18 @@ npm test       # vitest: crypto, backup, credential-persistence, schedule suites
 npm run build  # production build in dist/ (web page + extension), CSP injected
 npm run visual # drives the whole onboarding in a real browser, screenshots each screen
 npm run autofill  # loads the packed extension in a real browser and tests the fill path
+npm run journey   # walks the entire product once, in the extension, as a user would
 ```
+
+`npm run journey` is the one that answers "does the thing actually work". In a
+single fresh browser profile it builds a vault from the welcome screen (tutorial,
+demo walk, generated phrase, placement, all three gauntlets, mastery gate), saves
+a credential, exports a backup as a real download, locks and reopens with nothing
+but the generated phrase, fills that credential into a real login form from the
+real toolbar popup, restores the backup over a vault that has changed since,
+undoes the restore, and changes the master passphrase. 35 checks, every one of
+them against what is on screen rather than against internal state. It needs Edge,
+for the same reason `autofill` does, and takes a few minutes — most of it Argon2id.
 
 `npm run autofill` needs Microsoft Edge: Chrome 137 and later ignore `--load-extension`,
 so on Chrome the extension silently never loads and every check would pass vacuously.

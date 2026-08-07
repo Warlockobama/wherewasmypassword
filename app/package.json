@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "icons": "node scripts/generate-icons.mjs",
     "visual": "node scripts/visual-check.mjs",
-    "autofill": "node scripts/autofill-check.mjs"
+    "autofill": "node scripts/autofill-check.mjs",
+    "journey": "node scripts/journey-check.mjs"
   },
   "dependencies": {
     "hash-wasm": "^4.12.0",
