@@ -151,12 +151,24 @@ keep its own clipboard history.
 cd app
 npm install
 npm run dev    # http://localhost:5199
-npm test       # vitest: crypto, backup, credential-persistence, schedule suites
+npm test       # vitest: crypto, backup, credential-persistence, schedule and screen suites
 npm run build  # production build in dist/ (web page + extension), CSP injected
 npm run visual # drives the whole onboarding in a real browser, screenshots each screen
 npm run autofill  # loads the packed extension in a real browser and tests the fill path
 npm run journey   # walks the entire product once, in the extension, as a user would
 ```
+
+Most of `npm test` runs under `node` with no DOM. The screens are the exception:
+files starting `// @vitest-environment jsdom` render React components, and they
+are where the *refusals* are checked — the restore gate, the undo gate, the
+onboarding refusal, the origin-mismatch warning, the passphrase-change gate.
+Those cost two dev-only dependencies, `jsdom` and `@testing-library/react`,
+which is a supply-chain addition to a password manager and so worth stating
+plainly: neither is in `dependencies`, neither reaches the extension, and the
+production build has exactly the four runtime dependencies it always had. Under
+those tests the crypto is real — real AES-GCM, real header binding, the real
+storage layer over an in-memory `idb` — and only Argon2id is stubbed, because
+256 MiB per assertion would make the suite take minutes.
 
 `npm run journey` is the one that answers "does the thing actually work". In a
 single fresh browser profile it builds a vault from the welcome screen (tutorial,
