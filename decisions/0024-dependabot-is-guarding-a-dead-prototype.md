@@ -20,9 +20,21 @@ Street-View prototype. Not one touches `app/`, which is the product. Dependabot
 found a lockfile, and the lockfile belongs to code that has not been built since
 the occlusion problem killed that approach.
 
+Pushing the release made the scale of it clear. GitHub reports **42 open
+Dependabot alerts** on the default branch — 1 critical, 18 high — and every
+single one is against `wherewasmypassword/package-lock.json`. `npm audit` inside
+`app/`, which is the code that actually ships, reports **zero**.
+
 So the alert channel that should tell us about a real dependency problem in the
-shipping extension is instead five notifications about a Next.js app nobody
-runs, and has been since 28 July.
+shipping extension is instead 42 alerts and five pull requests about a Next.js
+app nobody runs, and has been since 28 July. The number is the argument: at 42
+alerts nobody reads the list, and the one that eventually matters arrives
+looking exactly like the 42 that do not.
+
+There is also a presentation cost now that there is something to present. A
+password manager with a public release and a security banner reading "1 critical,
+18 high" tells a visitor nothing true — the critical is in a dead prototype's
+transitive dependency — but they have no way to know that from the banner.
 
 ## Why this is a decision and not a cleanup
 
