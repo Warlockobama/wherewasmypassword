@@ -1,6 +1,6 @@
 # 0022 — How does v1 actually reach a user's browser?
 
-**Status:** OPEN — needs James
+**Status:** RESOLVED (user call, 2026-08-07) — see the resolution at the bottom.
 
 ## The locked direction
 
@@ -57,3 +57,7 @@ James picks A, B, both, or neither. If A: I add `npm run package` and the
 release checklist, and cut the tag. If B: I need to know whose developer
 account and what the listing should say about data handling — that is a second
 round of questions, not something to guess at.
+
+## RESOLUTION (user call, 2026-08-07 — via exec assistant)
+
+1. **Decision:** James said "one now" for a packaged download, and "we’ll go with the store once we have it stable and ready for an audience." Proceed with a tagged GitHub release and packaging workflow now (zip and checksum), and defer Chrome/Edge store submission until a later stage when stability and audience goals are met.

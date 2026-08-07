@@ -1,6 +1,6 @@
 # 0023 — The directive queue is empty: what should the next slice be?
 
-**Status:** OPEN — needs James
+**Status:** RESOLVED (user call, 2026-08-07) — see the resolution at the bottom.
 
 ## Why this exists
 
@@ -48,3 +48,7 @@ Holding off on 4 entirely until the first three are done.
 
 James names an order, or says "your call" — in which case I take the default
 above and start with the end-to-end walk.
+
+## RESOLUTION (user call, 2026-08-07 — via exec assistant)
+
+1. **Decision:** James said "we'll go with that order." Proceed with the recommended priority: end-to-end real browser walk first, then add UI tests with a DOM environment, then release plumbing. Do not start new v2 capabilities until those are done.

@@ -20,3 +20,5 @@
 - 2026-08-03 RESOLVED 0019-restore-on-a-locked-screen-is-ungated.md — 1. **Ruling:** "both, with a option to configure that behavior" — require a passphrase check for both the incoming backu
 - 2026-08-04 RESOLVED 0020-finishing-onboarding-twice-destroys-a-vault.md — 1. **Decision:** James said "go with that" to the recommended default. Onboarding must refuse creating a vault when one 
 - 2026-08-07 DIRECTIVE 0021-status-check-what-are-you-working.md — James is checking in. Reply by appending a `## Status report (date)` section to this doc, and keep it short — it gets re
+- 2026-08-07 RESOLVED 0022-how-does-v1-reach-real-users.md — 1. **Decision:** James said "one now" for a packaged download, and "we’ll go with the store once we have it stable and r
+- 2026-08-07 RESOLVED 0023-the-queue-is-empty-what-next.md — 1. **Decision:** James said "we'll go with that order." Proceed with the recommended priority: end-to-end real browser w
