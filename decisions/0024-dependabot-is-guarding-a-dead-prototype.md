@@ -80,3 +80,45 @@ touches anything that ships.
 ## RESOLUTION (user call, 2026-08-09 — via exec assistant)
 
 1. **Ruling:** Delete the three dead prototype directories (`wherewasmypassword/`, `go_wwmp/`, and `deeps/`). Preserve the project history and rationale in the README and git history, close the existing Dependabot PRs, and remove the vulnerable lockfiles as part of the deletion.
+
+## Carried out (2026-08-09) — `75b011e`
+
+Everything above the resolution is a frozen snapshot of the argument, including
+the section arguing the prototypes were kept on purpose and the recommendation
+to keep them. The ruling overrode both. What actually happened:
+
+**Deleted** — 25 tracked files across the three directories, 3,046 lines. Root
+`init.ps1` went with them: 317 lines of PowerShell whose only output was the
+four Street-View React components under `wherewasmypassword/src/`, so it was
+orphaned by the deletion rather than an extension of it.
+
+**Two things found untracked on disk**, both now gone. `wherewasmypassword/.git.bak`,
+which `.gitignore` described as the prototype's local history preserved on
+purpose, held zero objects and zero refs — nothing was lost by removing it, and
+the ignore rule went too. And a `.env.local` holding a
+`NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`. **That key should be revoked at Google if it
+has not been already** — this repo's history was scrubbed of a leaked key once
+before, and nothing in the repo can tell us whether this is the same one or
+whether it is still live. It is the one item here that needs James.
+
+Also removed: a stale `git worktree` under `.claude/worktrees/`, clean and
+pinned to a commit from 27 July, which was the last copy of the vulnerable
+lockfile left anywhere on this machine.
+
+**The story survives.** `README.md` now says what each of the three was — one
+Next.js app, two Go-and-HTML spikes — why occlusion killed all three, and where
+the code went: `ad66ef0`, this commit's parent, the last one that carried it.
+`CLAUDE.md` says they were deleted rather than that they exist.
+
+**Result.** All five Dependabot PRs closed with an explanation, and Dependabot
+deleted its own branches — `master` is the only branch on the remote. Open
+Dependabot alerts on the default branch went from **42 (1 critical, 17 high) to
+zero**; all 53 alerts the repo has ever had now read `fixed`.
+
+**Nothing that ships changed, and this is checkable rather than asserted.**
+`npm run package` after the deletion produces a zip whose SHA-256 is
+`b3561d88cf337782915e74914fbc664b0c5aeb27a09947d65bddd05ee12744dd` — the same
+hash published in the v1.1.0 release notes. Gates: 272 tests in 16 files green,
+`tsc -b` and the production build clean. The browser gates (`visual`,
+`autofill`, `journey`) were not re-run, because the artifact they would exercise
+is byte-for-byte the one they already passed.
