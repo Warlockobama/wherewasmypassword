@@ -16,9 +16,18 @@ technique: fusing your word with a shocking, emotionally charged character gives
 second handle. The app keeps its residents PG-13 and coaches you to make your private
 mental version as lewd as you dare, which is, per the book, exactly what works.
 
-Earlier prototypes (in `wherewasmypassword/`, `go_wwmp/`, `deeps/`) tried Google Street View
-as the memory space; they died on the same rock: real-map imagery can't do **occlusion** —
-you can't hide something in a drawer and open it later. The illustrated house can.
+Three earlier prototypes tried Google Street View as the memory space — a Next.js app
+(`wherewasmypassword/`) and two Go-and-HTML spikes (`go_wwmp/`, `deeps/`). All three died on
+the same rock: real-map imagery can't do **occlusion**. You can't hide something in a drawer
+and open it later, and a locus that never closes is one you can only glance at. The
+illustrated house closes.
+
+Their code is no longer in the working tree; it is in git history, and `git log --
+wherewasmypassword` or a checkout of `ad66ef0` — the last commit that carried them — still
+has all of it. They were removed because their lockfiles, which nothing had installed since
+the occlusion problem killed the approach, were the sole source of every one of the 42 open
+Dependabot alerts on a repository whose shipping code has none: a security banner reading
+"1 critical, 18 high" about a dead prototype tells a visitor nothing true (`decisions/0024`).
 
 ## The app (v1) — `app/`
 

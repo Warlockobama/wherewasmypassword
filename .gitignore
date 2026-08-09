@@ -7,11 +7,6 @@ screenshots/
 *.local
 .DS_Store
 
-# Inner git dir of the dead Next.js prototype, kept on disk as local history only.
-# It was tracked by mistake; git does not report it as untracked because it is
-# repository-shaped, so an explicit rule is the only thing keeping it out.
-.git.bak/
-
 # TypeScript's incremental-build cache. It was tracked by mistake: it is
 # rewritten by every `tsc -b` and so turns up dirty in every working tree.
 *.tsbuildinfo

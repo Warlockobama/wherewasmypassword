@@ -22,3 +22,4 @@
 - 2026-08-07 DIRECTIVE 0021-status-check-what-are-you-working.md — James is checking in. Reply by appending a `## Status report (date)` section to this doc, and keep it short — it gets re
 - 2026-08-07 RESOLVED 0022-how-does-v1-reach-real-users.md — 1. **Decision:** James said "one now" for a packaged download, and "we’ll go with the store once we have it stable and r
 - 2026-08-07 RESOLVED 0023-the-queue-is-empty-what-next.md — 1. **Decision:** James said "we'll go with that order." Proceed with the recommended priority: end-to-end real browser w
+- 2026-08-09 RESOLVED 0024-dependabot-is-guarding-a-dead-prototype.md — 1. **Ruling:** Delete the three dead prototype directories (`wherewasmypassword/`, `go_wwmp/`, and `deeps/`). Preserve t

@@ -5,9 +5,12 @@ memorize a strong diceware master passphrase via the method of loci (an
 illustrated memory house with placement journeys and training gauntlets),
 backed by an Argon2id / AES-256-GCM encrypted local-only vault.
 
-The active v1 lives in `app/` (TypeScript/Vite). `wherewasmypassword/`,
-`go_wwmp/`, and `deeps/` are dead Street-View-based prototypes — don't
-build on them.
+The active v1 lives in `app/` (TypeScript/Vite), which is now the only code
+in the repo. Three dead Street-View-based prototypes (`wherewasmypassword/`,
+`go_wwmp/`, `deeps/`) were deleted on 2026-08-09 because their unbuilt
+lockfiles were generating every Dependabot alert on the repo
+(`decisions/0024`). They survive in git history and in the README's account
+of why the approach failed — don't restore them and don't build on them.
 
 Security posture: local-only vault, no telemetry, no network sync. Treat
 any change that touches key derivation, encryption, or storage as

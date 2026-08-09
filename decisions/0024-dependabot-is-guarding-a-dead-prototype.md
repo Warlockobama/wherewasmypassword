@@ -1,6 +1,6 @@
 # 0024 — Dependabot is guarding a prototype nobody builds
 
-**Status:** OPEN — needs a call from James.
+**Status:** RESOLVED (user call, 2026-08-09) — see the resolution at the bottom.
 
 ## What turned up
 
@@ -76,3 +76,7 @@ commit.
 
 James picks one. Either way the five open PRs get closed, since none of them
 touches anything that ships.
+
+## RESOLUTION (user call, 2026-08-09 — via exec assistant)
+
+1. **Ruling:** Delete the three dead prototype directories (`wherewasmypassword/`, `go_wwmp/`, and `deeps/`). Preserve the project history and rationale in the README and git history, close the existing Dependabot PRs, and remove the vulnerable lockfiles as part of the deletion.
