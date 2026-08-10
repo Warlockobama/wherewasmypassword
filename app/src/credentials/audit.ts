@@ -230,13 +230,17 @@ export function ceilingBits(password: string): number {
  * "a capital, a number and a symbol". Requiring the decoration is what keeps it
  * distinct from `single-class`: a bare lowercase word is a different complaint.
  */
+/**
+ * Built once rather than per call. The digit run is generous on purpose: capping
+ * it low means one digit past the cap drops the finding altogether rather than
+ * degrading it, so `password1234` was caught and `password12345` was clean.
+ */
+const DECORATED_WORD = new RegExp(
+  `^[A-Z]?[a-z]{2,${WORD_RUN_MAX}}([0-9]{0,8})([^A-Za-z0-9]{0,2})$`,
+)
+
 function looksLikeDecoratedWord(password: string): boolean {
-  // The digit run is generous on purpose: capping it low means one digit past
-  // the cap drops the finding altogether rather than degrading it, so
-  // `password12345` came back clean while `password1234` did not.
-  const match = new RegExp(
-    `^[A-Z]?[a-z]{2,${WORD_RUN_MAX}}([0-9]{0,8})([^A-Za-z0-9]{0,2})$`,
-  ).exec(password)
+  const match = DECORATED_WORD.exec(password)
   if (!match) return false
   return match[1].length + match[2].length >= 1
 }

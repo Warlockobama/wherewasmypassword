@@ -53,6 +53,7 @@ const DEBUG_PORT = 9336
 const SITE_PASSWORD = 'journey-secret-9x7-Qm'
 const SITE_USER = 'someone@example.com'
 const FIRST_LABEL = 'Journey login'
+const REVIEW_LABEL = 'Forum with the phrase on it'
 const SECOND_LABEL = 'Added after the backup'
 
 // Edge first, deliberately: Chrome 137 and later ignore `--load-extension`
@@ -519,6 +520,46 @@ async function main() {
       !(await house.seen(SITE_PASSWORD)),
       'the list shows labels and usernames only',
     )
+    check(
+      'the review panel finds nothing to flag about a generated password',
+      (await house.seen('Password review')) && (await house.seen('Nothing to flag')),
+      `review says: ${(await house.text()).match(/Password review[\s\S]{0,140}/)?.[0]?.replace(/\n/g, ' | ')}`,
+    )
+
+    // The one failure a password manager built on a memorised phrase can
+    // produce and a general one cannot: the phrase the whole house exists to
+    // protect, typed into a website's password box (`decisions/0026`). Worth
+    // driving end to end rather than only in a unit test, because the panel has
+    // to name the entry while the phrase itself stays off the screen.
+    // Deliberately on another origin. Pointed at this one it would outrank the
+    // real entry for the login page in the popup below, and the fill step would
+    // quietly type this password instead — which is how this was first written.
+    await addCredential({
+      label: REVIEW_LABEL,
+      url: 'https://forum.example.com',
+      username: SITE_USER,
+      password: words.join(' '),
+    })
+    check(
+      'the review flags the master passphrase used as a site password',
+      (await house.seen('Password review')) && (await house.seen('can open the vault itself')),
+      `review says: ${(await house.text()).match(/Password review[\s\S]{0,220}/)?.[0]?.replace(/\n/g, ' | ')}`,
+    )
+    const phraseOnScreen = await house.evaluate(
+      `${JSON.stringify(words)}.filter((w) => document.body.innerText.includes(w))`,
+    )
+    check(
+      'it says so without printing the phrase it is complaining about',
+      Array.isArray(phraseOnScreen) && phraseOnScreen.length === 0,
+      phraseOnScreen?.length
+        ? `these master words are on screen: ${phraseOnScreen.join(', ')}`
+        : 'none of the six words appears anywhere on the unlocked screen',
+    )
+    check(
+      'the entry it names is the one that can be opened from the panel',
+      await house.seen(REVIEW_LABEL),
+      `flagged entry: ${REVIEW_LABEL}`,
+    )
 
     // ==================================================================== //
     // 3. The backup, as a real download.
@@ -663,13 +704,23 @@ async function main() {
     await popupWaitFor(`document.body.innerText.includes(${JSON.stringify(FIRST_LABEL)})`, {
       what: 'the popup to unlock',
     })
+    // Read once and compared by position rather than by presence. Asserting only
+    // that both strings appear somewhere let this pass while a second entry sat
+    // above the right one and the fill below typed the wrong password.
+    const ranked = await popupText()
+    const matchAt = ranked.indexOf(FIRST_LABEL)
+    const otherAt = ranked.indexOf(REVIEW_LABEL)
+    // The badge is rendered lower-case and upper-cased by CSS, and `innerText`
+    // reports what is on the glass rather than what is in the DOM.
+    const badgeAt = ranked.search(/this page/i)
     check(
       'the same phrase opens the vault in the popup, and the entry for this page is on top',
-      (await popupText()).includes(FIRST_LABEL) &&
-        // The badge is rendered lower-case and upper-cased by CSS, and
-        // `innerText` reports what is on the glass rather than what is in the DOM.
-        /this page/i.test(await popupText()),
-      `popup shows: ${(await popupText()).replace(/\n/g, ' | ').slice(0, 140)}`,
+      matchAt !== -1 &&
+        badgeAt > matchAt &&
+        // Above every other entry, and holding the badge itself rather than
+        // merely sharing a screen with it.
+        (otherAt === -1 || (matchAt < otherAt && badgeAt < otherAt)),
+      `popup shows: ${ranked.replace(/\n/g, ' | ').slice(0, 140)}`,
     )
 
     const fields = () =>

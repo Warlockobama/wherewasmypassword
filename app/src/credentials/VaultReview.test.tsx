@@ -73,6 +73,23 @@ describe('VaultReview', () => {
     expect(screen.getByText(/The same password is on Bank and Shop\./)).toBeTruthy()
   })
 
+  it('counts the rest once a password is on more entries than a sentence can name', () => {
+    // `auditVault` stops collecting labels after a handful, so the panel has to
+    // say how many it is not naming. Reading out forty labels would be useless
+    // anyway — the number is the alarming part.
+    renderReview(
+      Array.from({ length: 12 }, (_, i) => cred({ label: `Site ${i}`, password: 'one-for-all-9127' })),
+    )
+    expect(screen.getAllByText(/and 7 others\./).length).toBeGreaterThan(0)
+    // Still the plain list when every one of them fits.
+    cleanup()
+    renderReview([
+      cred({ label: 'Bank', password: 'p-9127-p' }),
+      cred({ label: 'Router', password: 'p-9127-p' }),
+    ])
+    expect(screen.getByText(/The same password is on Router\./)).toBeTruthy()
+  })
+
   it('puts the master passphrase at the top and says what it costs', () => {
     // Both of these are critical, and 'Forum' sorts before 'Webmail'. Severity
     // alone would therefore lead with the forum — but one of these loses one

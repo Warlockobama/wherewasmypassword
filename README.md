@@ -56,6 +56,19 @@ Dependabot alerts on a repository whose shipping code has none: a security banne
   re-encrypts the vault under it with your passwords untouched. Vaults created under
   weaker key-derivation settings are re-keyed to the current ones automatically, the
   next time they are unlocked.
+- **Password review**: under the list, a pass over the entries already open in front of
+  you — reuse (naming the other entries, and counting them past the first few), length,
+  character mix, a handful of shapes that get guessed first, and the master passphrase
+  itself turning up as a site password, which is the one failure a manager built on a
+  memorised phrase can produce and a general one cannot. Every complaint ends in a
+  **Fix** button that opens the same edit form. It runs entirely inside the unlocked
+  vault: no network request, no new permission, and no password ever reaches the panel —
+  it is handed ids, lengths and verdicts. **What it deliberately is not**: there is no
+  breach corpus and no bundled dictionary, because the first needs a network call this
+  extension never makes and the second is small enough to feel authoritative while being
+  far too small to be, so "not in our list" would read as "safe". Every rule is
+  structural instead, and the panel says on screen that a password with nothing listed
+  has passed *these checks*, which is not the same as being strong.
 - **The toolbar popup**: on a login page, click the toolbar button. A compact panel
   unlocks, puts the entry saved for *that* site at the top of the list, and types it
   straight into the form — no clipboard. The memory house stays a full tab, which is
@@ -71,6 +84,12 @@ Dependabot alerts on a repository whose shipping code has none: a security banne
   encrypted vault afterwards — never in plaintext storage.
 - No server, no analytics, zero network requests; production builds ship a strict CSP
   (`default-src 'self'`; WASM allowed for Argon2id only).
+- The password review is the place that promise costs something, and it is worth being
+  explicit: a review panel is exactly where a password manager would normally send
+  hashes to a breach service. This one does not, so it cannot tell you a password has
+  leaked — only what its own structural rules can see about the entries already
+  decrypted in front of you. Nothing about it reaches the network or asks for a new
+  permission, and it is told ids and lengths rather than passwords.
 - Auto-lock after 5 minutes idle, 60 seconds after the tab is hidden, and a 30-minute
   ceiling no activity can extend. The popup drops its key 5 minutes after the unlock that
   made it, whether or not the session below is on. Deadlines are wall-clock, so a
@@ -183,10 +202,11 @@ storage layer over an in-memory `idb` — and only Argon2id is stubbed, because
 `npm run journey` is the one that answers "does the thing actually work". In a
 single fresh browser profile it builds a vault from the welcome screen (tutorial,
 demo walk, generated phrase, placement, all three gauntlets, mastery gate), saves
-a credential, exports a backup as a real download, locks and reopens with nothing
-but the generated phrase, fills that credential into a real login form from the
-real toolbar popup, restores the backup over a vault that has changed since,
-undoes the restore, and changes the master passphrase. 35 checks, every one of
+a credential, reviews it for weak and reused passwords, exports a backup as a
+real download, locks and reopens with nothing but the generated phrase, fills
+that credential into a real login form from the real toolbar popup, restores
+the backup over a vault that has changed since,
+undoes the restore, and changes the master passphrase. 39 checks, every one of
 them against what is on screen rather than against internal state. It needs Edge,
 for the same reason `autofill` does, and takes a few minutes — most of it Argon2id.
 
