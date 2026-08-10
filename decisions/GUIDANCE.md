@@ -23,3 +23,5 @@
 - 2026-08-07 RESOLVED 0022-how-does-v1-reach-real-users.md — 1. **Decision:** James said "one now" for a packaged download, and "we’ll go with the store once we have it stable and r
 - 2026-08-07 RESOLVED 0023-the-queue-is-empty-what-next.md — 1. **Decision:** James said "we'll go with that order." Proceed with the recommended priority: end-to-end real browser w
 - 2026-08-09 RESOLVED 0024-dependabot-is-guarding-a-dead-prototype.md — 1. **Ruling:** Delete the three dead prototype directories (`wherewasmypassword/`, `go_wwmp/`, and `deeps/`). Preserve t
+- 2026-08-09 RESOLVED 0025-revoke-the-prototypes-google-maps-key.md — 1. **James ruled: "get rid of it".** Revoke the prototype Google Maps API key in Google Cloud (APIs & Services → Credent
+- 2026-08-09 RESOLVED 0026-the-queue-is-empty-again-what-next.md — 1. **James said: "your call".** Proceed with the recommended default direction.
