@@ -1,6 +1,6 @@
 # 0026 — The 0023 order is finished: what is the next slice?
 
-**Status:** OPEN — needs James to name a direction.
+**Status:** RESOLVED (user call, 2026-08-09) — see the resolution at the bottom.
 
 ## Why this exists
 
@@ -76,3 +76,9 @@ has a doc of its own.
 
 James names a direction, or says "your call" — in which case I take the default
 and start on the weak-and-reused pass.
+
+## RESOLUTION (user call, 2026-08-09 — via exec assistant)
+
+1. **James said: "your call".** Proceed with the recommended default direction.
+2. **Execution plan:** James will handle the product validation items (having someone else try the release and running the long-term recall test over time) when possible, while the team starts work on the weak-and-reused password pass in the already-unlocked vault, with no new permissions and no network calls.
+3. **Deferrals:** Store listing decisions, a second browser, and import-from-browser-password-store remain deferred until explicitly prioritized or documented.

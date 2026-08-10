@@ -17,6 +17,7 @@ import { isExtensionContext } from '../platform.ts'
 import type { Credential } from '../credentials/types.ts'
 import CredentialList from '../credentials/CredentialList.tsx'
 import CredentialForm from '../credentials/CredentialForm.tsx'
+import VaultReview from '../credentials/VaultReview.tsx'
 import {
   addCredential,
   editCredential,
@@ -228,6 +229,20 @@ export default function UnlockedHome({
           onDelete={(id) => void handleDeleteCredential(id)}
         />
       </Panel>
+
+      {/* Directly under the list it is about, and above the edit form its Fix
+          buttons open. It is handed `data.words` — the master phrase — because
+          a site password that *is* the phrase is the one failure a password
+          manager built on a memorised phrase can produce and a general one
+          cannot (`decisions/0026`). */}
+      <VaultReview
+        credentials={data.entries}
+        masterWords={data.words}
+        onEdit={(cred) => {
+          setEditingCred(cred)
+          setFormMode('edit')
+        }}
+      />
 
       {formMode === 'add' && (
         <CredentialForm

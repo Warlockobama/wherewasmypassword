@@ -395,6 +395,24 @@ async function main() {
     await sleep(500)
     await shot('13-credential-list')
 
+    // Two deliberately bad entries, sharing one password, so the review panel
+    // (`decisions/0026`) is caught in its flagged state rather than only in the
+    // "nothing to flag" one the generator above produces. The screenshot is the
+    // lesser reason: its longest line is a reuse row naming every *other* entry
+    // holding the same password, and an unbroken run of labels is exactly the
+    // shape that runs off the side of a 390px screen — which is what the
+    // overflow check below is for.
+    for (const label of ['Book club forum', 'Newsletter sign-up']) {
+      await click('+ Add')
+      await sleep(300)
+      await type('input', label)
+      // Index 4 is the password field: label, site URL, username, password.
+      await type('input', 'Summer2024', 4)
+      await click('Add')
+      await sleep(500)
+    }
+    await shot('14-password-review')
+
     const widest = await evaluate(`(() => {
       let worst = null
       for (const el of document.querySelectorAll('*')) {
@@ -423,7 +441,7 @@ async function main() {
     if (!afterReload.toLowerCase().includes('unlock')) {
       problems.push('a reload did not land on the lock screen')
     }
-    await shot('14-after-reload')
+    await shot('15-after-reload')
 
     // The toolbar popup, at the width the browser actually gives it. It is
     // served here as a plain page, so it reports that it is not running as the
@@ -439,7 +457,7 @@ async function main() {
     })
     await call('Page.navigate', { url: `${ORIGIN}/popup.html` })
     await sleep(1500)
-    await shot('15-popup-locked')
+    await shot('16-popup-locked')
     const popupText = await evaluate(`document.body.innerText.trim()`)
     console.log(`\nPopup: "${popupText.split('\n').join(' | ').slice(0, 110)}"`)
     if (!popupText.toLowerCase().includes('unlock')) {
