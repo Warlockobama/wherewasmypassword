@@ -1,6 +1,6 @@
 # 0027 — Does the password review warrant cutting v1.2.0?
 
-**Status:** OPEN — needs James, because the last two steps are his.
+**Status:** RESOLVED (user call, 2026-08-11) — see the resolution at the bottom.
 
 ## Why this exists
 
@@ -49,3 +49,36 @@ James says ship it — in which case the next session does steps 1–5 and step 
 bumps `public/manifest.json` and `package.json` together, and hands him the zip
 plus the one manual check. Or he says let it ride, and this closes with the
 version untouched.
+
+## RESOLUTION (user call, 2026-08-11 — via exec assistant)
+
+1. **Ruling:** Let it ride for now. James said "yeah, let it ride for now," so do not cut v1.2.0 yet; keep v1.1.0 as the published zip while we continue gathering results and ship the review later with whatever else turns up.
+
+## Carried out (2026-08-11)
+
+Nothing shipped, which is the whole content of the ruling. `public/manifest.json`
+and `package.json` both still read `1.1.0`, `v1.1.0` is still the only tag, and
+the published zip is untouched — `b3561d88…44dd`, the same checksum the release
+notes carry. No step of `RELEASE.md` was run beyond the gates, which were run to
+confirm master is releasable whenever the answer changes: 320 tests over 18
+files, `tsc -b` and the production build clean, `npm audit --omit=dev` zero.
+(The doc above said 319; a screen assertion was added with the panel and the
+count moved by one.)
+
+**What waiting now costs, stated once so it is not a surprise later.** Master is
+ahead of tag `v1.1.0` by the review panel — 1,187 lines across five files — while
+still calling itself version 1.1.0. Anyone running `npm run package` on master
+therefore writes `release/wherewasmypassword-1.1.0.zip` with contents the
+published 1.1.0 does not have and a checksum that does not match the release
+notes. The published artifact on GitHub is safe; the local file is what gets
+overwritten, and it is recoverable by checking out the tag and packaging again.
+This is a property of letting master run ahead of a version number, and it grows
+with every feature that lands before the next release, so the packaging script
+now refuses that case outright rather than leaving it to be noticed (`04cfe19`).
+Checking that refusal is what turned up `0028`: the published checksum could not
+be reproduced from the tag on any machine, for a reason that has nothing to do
+with this ruling and everything to do with line endings.
+
+Still with James, unchanged by this ruling and both aimed at v1.1.0: someone who
+is not the author installing the release, and the four-week cold-recall test.
+This doc closes.

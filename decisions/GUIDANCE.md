@@ -25,3 +25,4 @@
 - 2026-08-09 RESOLVED 0024-dependabot-is-guarding-a-dead-prototype.md — 1. **Ruling:** Delete the three dead prototype directories (`wherewasmypassword/`, `go_wwmp/`, and `deeps/`). Preserve t
 - 2026-08-09 RESOLVED 0025-revoke-the-prototypes-google-maps-key.md — 1. **James ruled: "get rid of it".** Revoke the prototype Google Maps API key in Google Cloud (APIs & Services → Credent
 - 2026-08-09 RESOLVED 0026-the-queue-is-empty-again-what-next.md — 1. **James said: "your call".** Proceed with the recommended default direction.
+- 2026-08-11 RESOLVED 0027-does-the-review-panel-warrant-a-release.md — 1. **Ruling:** Let it ride for now. James said "yeah, let it ride for now," so do not cut v1.2.0 yet; keep v1.1.0 as the

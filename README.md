@@ -62,8 +62,11 @@ Dependabot alerts on a repository whose shipping code has none: a security banne
   itself turning up as a site password, which is the one failure a manager built on a
   memorised phrase can produce and a general one cannot. Every complaint ends in a
   **Fix** button that opens the same edit form. It runs entirely inside the unlocked
-  vault: no network request, no new permission, and no password ever reaches the panel —
-  it is handed ids, lengths and verdicts. **What it deliberately is not**: there is no
+  vault: no network request, no new permission, and **no password is ever rendered** —
+  the review itself returns ids, lengths and verdicts, so nothing the panel draws can
+  contain one. What that does not buy, said plainly: the panel is handed the entries,
+  because the Fix button has to give the real one back to the edit form, so they are
+  visible to React devtools exactly as they are in the list above it. **What it deliberately is not**: there is no
   breach corpus and no bundled dictionary, because the first needs a network call this
   extension never makes and the second is small enough to feel authoritative while being
   far too small to be, so "not in our list" would read as "safe". Every rule is
@@ -89,7 +92,8 @@ Dependabot alerts on a repository whose shipping code has none: a security banne
   hashes to a breach service. This one does not, so it cannot tell you a password has
   leaked — only what its own structural rules can see about the entries already
   decrypted in front of you. Nothing about it reaches the network or asks for a new
-  permission, and it is told ids and lengths rather than passwords.
+  permission, and what it *draws* is built from ids, lengths and verdicts rather than
+  from passwords.
 - Auto-lock after 5 minutes idle, 60 seconds after the tab is hidden, and a 30-minute
   ceiling no activity can extend. The popup drops its key 5 minutes after the unlock that
   made it, whether or not the session below is on. Deadlines are wall-clock, so a
@@ -179,7 +183,8 @@ keep its own clipboard history.
 cd app
 npm install
 npm run dev    # http://localhost:5199
-npm test       # vitest: crypto, backup, credential-persistence, schedule and screen suites
+npm test       # vitest: crypto, backup, credential-persistence, schedule, password-review
+               # and screen suites, plus the release guard
 npm run build  # production build in dist/ (web page + extension), CSP injected
 npm run visual # drives the whole onboarding in a real browser, screenshots each screen
 npm run autofill  # loads the packed extension in a real browser and tests the fill path
@@ -247,6 +252,14 @@ The zip is reproducible: check out the tag, run `npm run package` in `app/`, and
 you get a byte-identical archive with the same SHA-256. You do not have to take
 our word for what is in the download.
 
+**With one honest exception, which is v1.1.0.** That archive was built before
+line endings were pinned, and `public/` is copied into the package byte for
+byte — so a checkout on Windows, where git rewrites LF to CRLF by default,
+builds a zip that differs from the published one in whitespace and therefore in
+every digit of its checksum. `.gitattributes` fixes that for everything after
+it (`decisions/0028`); v1.1.0 itself cannot be reproduced from its tag, and
+saying so is better than a checksum that quietly means nothing.
+
 **Two things to know before you rely on it.** It does not auto-update: a loaded
 zip stays exactly as it is until you download a newer one and load that. And the
 vault lives in the browser profile you create it in — not in the zip, and not
@@ -270,7 +283,8 @@ opens the full tab, which is where you build the vault the first time.
 `RELEASE.md` is the checklist for cutting a new zip.
 
 The same `dist/` also works as a plain static site on any host; the extension wrapper is
-`public/manifest.json` + `public/background.js`. Vault data lives in the extension's own
+`public/manifest.json`, `public/background.js` and `public/content.js` (the script that
+types a password into the page). Vault data lives in the extension's own
 IndexedDB, so the web version and extension version have separate vaults — use the
 encrypted backup export/import to move between them.
 

@@ -20,7 +20,13 @@ commit anyone can check out, not a state of somebody's laptop.
    `package.json` must agree; `npm run package` refuses if they do not. Bump
    both in one commit.
 
-2. **Gates, all four, all green.**
+   It also refuses to package a version that is **already a tag** from a tree
+   that is not that tag — the case `decisions/0027` creates every time a feature
+   lands and the release waits. Two archives called 1.1.0 is precisely what
+   makes the published checksum worth nothing, so this step is enforced rather
+   than remembered (`scripts/release-guard.mjs`).
+
+2. **Gates, all five, all green.**
 
    ```bash
    npm test          # unit + screen suites
@@ -30,8 +36,9 @@ commit anyone can check out, not a state of somebody's laptop.
    npm run journey   # the whole product end to end, in the extension
    ```
 
-   `visual`, `autofill` and `journey` need Microsoft Edge: Chrome 137 and later
-   ignore `--load-extension`, so on Chrome they would pass vacuously.
+   `autofill` and `journey` need Microsoft Edge: Chrome 137 and later ignore
+   `--load-extension`, so on Chrome they would pass vacuously. `visual` serves
+   `dist/` as a page and drives whichever browser it finds, so it does not care.
 
 3. **Look at the screenshots.** `npm run visual` writes `screenshots/`. They
    are gitignored and they are the point — a layout regression is not something
@@ -45,8 +52,9 @@ commit anyone can check out, not a state of somebody's laptop.
 
    Builds, then writes `release/wherewasmypassword-<version>.zip` and a
    `.sha256` beside it. It refuses to package a build whose manifest asks for
-   anything beyond `activeTab`, `scripting`, `storage` and `alarms`, one that
-   requests host permissions at all, or one carrying source maps. Those are not
+   any permission set other than exactly `activeTab`, `scripting`, `storage`
+   and `alarms` — fewer is as much a surprise as more — one that requests host
+   permissions at all, or one carrying source maps. Those are not
    ceremony: a package is what reaches someone who will never read a manifest.
 
    **The zip is reproducible.** Every entry is stamped 1980-01-01 rather than
@@ -55,7 +63,15 @@ commit anyone can check out, not a state of somebody's laptop.
    worth publishing: a stranger can check out the tag, run `npm run package`,
    and compare, rather than taking our word for the file. If you ever change
    the packaging, check that property still holds — package twice and diff the
-   hashes.
+   hashes, and once from a fresh clone rather than only from this working tree.
+
+   **The v1.1.0 archive is the exception, and it is worth knowing why.** Its
+   entries came from a tree whose line endings were the ones this machine
+   happened to have; `public/` is copied into `dist/` byte for byte, so a fresh
+   checkout on Windows produced CRLF where the published zip has LF and the
+   checksum did not match. `.gitattributes` pins that from `04cfe19` onward
+   (`decisions/0028`), which makes the property true for the next release and
+   leaves v1.1.0 unreproducible from its tag.
 
 5. **Load the zip itself — not `dist/`.** Unzip it somewhere else, open
    `edge://extensions` (or `chrome://extensions`), turn on Developer mode, and
