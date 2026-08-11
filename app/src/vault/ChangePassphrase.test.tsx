@@ -65,7 +65,7 @@ import type { Credential } from '../credentials/types.ts'
 import { decryptVault, fromBase64, type Association, type VaultData } from '../crypto/vault.ts'
 import type { PracticeMeta, StoredVault } from '../storage/db.ts'
 import { fakeDeriveKey } from '../test/fake-kdf.ts'
-import { peekFakeDb, resetFakeDb, seedFakeDb } from '../test/fake-idb.ts'
+import { failNextFakeDbWrite, peekFakeDb, resetFakeDb, seedFakeDb } from '../test/fake-idb.ts'
 import { sealedUnder } from '../test/vault-fixtures.ts'
 
 const OLD_PHRASE = 'mailbox doormat closet fireplace oven fridge'
@@ -360,8 +360,44 @@ describe('when the vault moved underneath the flow (`decisions/0020`)', () => {
 
     expect(await screen.findByText(/re-encrypted somewhere else/)).toBeTruthy()
     expect(liveOnDisk()).toEqual(somebodyElses)
-    // The error screen promises the current phrase still works, which is only
-    // true if the refusal really did leave the key alone.
+    // The refusal has to leave this screen's key alone, or backing out would
+    // strand a user whose vault was never touched.
     expect([...rawKey].some((b) => b !== 0)).toBe(true)
+  })
+
+  it('does not tell the user their current phrase still opens a vault that was replaced', async () => {
+    // The generic failure screen says "nothing was changed — your current
+    // passphrase still opens the vault", which for this error is false: the
+    // record it refers to is gone, replaced by one under a phrase this screen
+    // has never seen. And the Try again beside it re-entered `seal` with the
+    // same superseded record, so it failed identically, forever.
+    show()
+    confirmWith(OLD_PHRASE)
+    fireEvent.click(await screen.findByRole('button', { name: /choose the new words/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /place them in the house/ }))
+    seedFakeDb('vault', 'primary', await sealedUnder('an entirely different vault phrase'))
+    fireEvent.click(screen.getByRole('button', { name: /Skip the walks, seal it anyway/ }))
+
+    await screen.findByText(/re-encrypted somewhere else/)
+    expect(screen.queryByText(/your current passphrase still opens the vault/)).toBeNull()
+    expect(screen.getByText(/Lock and unlock to pick it up/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Try again/ })).toBeNull()
+    // The way out is still there.
+    expect(screen.getByRole('button', { name: /Back to the vault/ })).toBeTruthy()
+  })
+
+  it('still offers a retry for a failure that really did change nothing', async () => {
+    // The distinction is the point: an ordinary write failure leaves the vault
+    // exactly where it was, and pressing Try again is the right thing to do.
+    show()
+    confirmWith(OLD_PHRASE)
+    fireEvent.click(await screen.findByRole('button', { name: /choose the new words/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /place them in the house/ }))
+    failNextFakeDbWrite('the disk said no')
+    fireEvent.click(screen.getByRole('button', { name: /Skip the walks, seal it anyway/ }))
+
+    expect(await screen.findByText(/the disk said no/)).toBeTruthy()
+    expect(screen.getByText(/your current passphrase still opens the vault/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Try again/ })).toBeTruthy()
   })
 })

@@ -122,6 +122,56 @@ describe('unlocking', () => {
     expect(rawKey).toBeInstanceOf(Uint8Array)
     expect(data.words).toEqual(DEVICE_PHRASE.split(' '))
   })
+
+  it('opens the vault that is on disk now, not the one this screen was handed', async () => {
+    // `App` reads the vault once, at page load, and hands it down. So a
+    // passphrase change anywhere else — another tab, or this tab before the
+    // idle timer locked it — left this screen deriving against a record that is
+    // no longer live: the phrase the user had just spent a gauntlet memorising
+    // was rejected, and the phrase they had been told was retired opened the
+    // vault, because the old record is still a self-consistent thing to
+    // decrypt. Credentials from before the change, and every save refused.
+    const rekeyed = await sealedUnder(BACKUP_PHRASE, { createdAt: Date.parse('2026-02-01') })
+    onDisk(rekeyed)
+    const onUnlock = vi.fn()
+    // Mounted with the stale record, exactly as `App` would have.
+    show(deviceVault, { onUnlock })
+
+    fireEvent.change(screen.getByPlaceholderText(/your passphrase/), {
+      target: { value: DEVICE_PHRASE },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^Unlock$/ }))
+    expect(await screen.findByText(/start at the mailbox/)).toBeTruthy()
+    expect(onUnlock).not.toHaveBeenCalled()
+
+    // And the phrase the vault on disk is actually under does open it.
+    fireEvent.change(screen.getByPlaceholderText(/your passphrase/), {
+      target: { value: BACKUP_PHRASE },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^Unlock$/ }))
+
+    await waitFor(() => expect(onUnlock).toHaveBeenCalledTimes(1))
+    // The record handed back is the live one, so the next save writes against
+    // the salt on disk rather than the one this screen mounted with.
+    expect(onUnlock.mock.calls[0][2].salt).toBe(rekeyed.salt)
+  })
+
+  it('says so rather than opening a snapshot when the vault has been deleted', async () => {
+    // Deleting from another copy of the UI broadcasts a lock, so this screen is
+    // what the other tab lands on — holding a record that no longer exists.
+    resetFakeDb()
+    seedFakeDb('meta', 'settings', { restoreGate: 'both' })
+    const onUnlock = vi.fn()
+    show(deviceVault, { onUnlock })
+
+    fireEvent.change(screen.getByPlaceholderText(/your passphrase/), {
+      target: { value: DEVICE_PHRASE },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^Unlock$/ }))
+
+    expect(await screen.findByText(/no vault on this device any more/)).toBeTruthy()
+    expect(onUnlock).not.toHaveBeenCalled()
+  })
 })
 
 describe('the restore gate (`decisions/0019`)', () => {

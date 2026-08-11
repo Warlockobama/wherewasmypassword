@@ -11,6 +11,7 @@ import {
   deleteArchivedVault,
   freshPracticeMeta,
   savePracticeMeta,
+  VaultSupersededError,
   type StoredVault,
 } from '../storage/db.ts'
 import { rekeyVault } from './seal.ts'
@@ -78,6 +79,16 @@ export default function ChangePassphrase({
   const [randomOrder, setRandomOrder] = useState<number[]>([])
   const [attempt, setAttempt] = useState(0)
   const [detail, setDetail] = useState('')
+  /**
+   * The failure that is not "nothing happened, try again".
+   *
+   * `VaultSupersededError` means something else re-keyed or replaced the vault
+   * while this flow was running, so the record `stored` describes is gone. The
+   * generic error screen would tell the user their current passphrase still
+   * opens the vault — which is now false — and offer a Try again that re-enters
+   * `seal` with the same superseded record, failing identically every time.
+   */
+  const [superseded, setSuperseded] = useState(false)
   const [result, setResult] = useState<{ rawKey: Uint8Array; data: VaultData; stored: StoredVault } | null>(
     null,
   )
@@ -139,6 +150,7 @@ export default function ChangePassphrase({
       }
     } catch (err) {
       setDetail(err instanceof Error ? err.message : String(err))
+      setSuperseded(err instanceof VaultSupersededError)
       setStep('error')
     }
   }
@@ -291,11 +303,23 @@ export default function ChangePassphrase({
           <Title>That Didn&apos;t Work</Title>
           <Panel className="w-full space-y-3 text-center">
             <p className="font-semibold text-brick">{detail}</p>
-            <p className="text-sm text-dusk/80">
-              Nothing was changed — your current passphrase still opens the vault.
-            </p>
+            {superseded ? (
+              <p className="text-sm text-dusk/80">
+                The vault on this device was replaced while you were here — a passphrase change,
+                a restore or an undo, somewhere else. Your new words were never sealed, and the
+                phrase that opens the vault now is whichever one that other change left in place.
+                Lock and unlock to pick it up, then start this again if you still want new words.
+              </p>
+            ) : (
+              <p className="text-sm text-dusk/80">
+                Nothing was changed — your current passphrase still opens the vault.
+              </p>
+            )}
             <div className="flex justify-center gap-3">
-              <Button onClick={() => void seal(words, associations)}>Try again</Button>
+              {/* No retry when the vault was superseded: `seal` would run
+                  against the record that has already been replaced and fail in
+                  exactly the same way, forever. */}
+              {!superseded && <Button onClick={() => void seal(words, associations)}>Try again</Button>}
               <Button variant="secondary" onClick={onCancel}>
                 Back to the vault
               </Button>

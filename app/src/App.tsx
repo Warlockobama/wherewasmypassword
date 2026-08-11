@@ -16,6 +16,7 @@ import {
   freshPracticeMeta,
   loadPracticeMeta,
   loadVault,
+  savePracticeMeta,
   type PracticeMeta,
   type StoredVault,
 } from './storage/db.ts'
@@ -71,6 +72,23 @@ export default function App() {
   const [stored, setStored] = useState<StoredVault | null>(null)
   const [meta, setMeta] = useState<PracticeMeta | null>(null)
   const [unlocked, setUnlocked] = useState<{ rawKey: Uint8Array; data: VaultData } | null>(null)
+  /**
+   * The same key the state holds, reachable without waiting for a render.
+   *
+   * `lock()` used to zero the key inside the `setUnlocked` updater, which works
+   * for a button press and not at all for `pagehide`: that is a raw window
+   * listener, so React schedules the updater through the scheduler, and a page
+   * being frozen into the back/forward cache or torn down does not run another
+   * render. The key survived in the heap of a page the user had left. The popup
+   * keeps a ref for exactly this reason (`popup/Popup.tsx`); this is the same
+   * belt, and every write to `unlocked` goes through `holdKey` so the two
+   * cannot drift.
+   */
+  const keyRef = useRef<Uint8Array | null>(null)
+  const holdKey = (next: { rawKey: Uint8Array; data: VaultData } | null) => {
+    keyRef.current = next?.rawKey ?? null
+    setUnlocked(next)
+  }
   // True when the unlock that opened this session also brought the vault up to
   // the current key-derivation settings or vault format, so the UI can say so
   // once rather than leaving it silent (`decisions/0013`).
@@ -91,11 +109,11 @@ export default function App() {
   }, [])
 
   const lock = (broadcast = true) => {
-    // Drop the key and plaintext; GC does the rest. Best effort in JS.
-    setUnlocked((u) => {
-      u?.rawKey.fill(0)
-      return null
-    })
+    // Drop the key and plaintext; GC does the rest. Best effort in JS — but
+    // done here and now rather than inside a state updater React may never run
+    // (see `keyRef`).
+    keyRef.current?.fill(0)
+    holdKey(null)
     // A copied password outlives the key otherwise: the pending clear holds
     // the plaintext until it fires. Take it off the clipboard now instead.
     void clearClipboardOnLock()
@@ -209,6 +227,25 @@ export default function App() {
     }
   }, [holdingKey])
 
+  /**
+   * A restored vault starts its practice ladder again — on disk, not only on
+   * screen.
+   *
+   * `restoreVault` and the undo swap the vault record and nothing else; the
+   * practice store still holds the *replaced* vault's count. Setting the fresh
+   * schedule in state alone meant the lock screen and the unlocked screen
+   * showed one thing until the next unlock, at which point `recordPracticeUnlock`
+   * read the old record back off disk and the fresh schedule vanished without
+   * anyone touching it.
+   */
+  const startFreshSchedule = (createdAt: number) => {
+    const fresh = freshPracticeMeta(createdAt)
+    setMeta(fresh)
+    // A practice date that failed to write is cosmetic; it must not take the
+    // restore down with it.
+    void savePracticeMeta(fresh).catch(() => {})
+  }
+
   const recordPractice = async () => {
     // Shared with the toolbar popup, which unlocks the same vault and counts
     // for the same schedule.
@@ -224,7 +261,7 @@ export default function App() {
           onComplete={() => setPhase('demo')}
           onRestored={(restoredVault) => {
             setStored(restoredVault)
-            setMeta(freshPracticeMeta(restoredVault.createdAt))
+            startFreshSchedule(restoredVault.createdAt)
             setPhase('locked')
           }}
         />
@@ -315,7 +352,7 @@ export default function App() {
             setAssociations([])
             setStored(storedVault)
             setMeta(freshPracticeMeta(data.createdAt))
-            setUnlocked({ rawKey, data })
+            holdKey({ rawKey, data })
             setPhase('unlocked')
           }}
           onExistingVault={async () => {
@@ -357,7 +394,7 @@ export default function App() {
             // write the vault back out under the settings it just left.
             setStored(currentStored)
             setResealed(resealed)
-            setUnlocked({ rawKey, data })
+            holdKey({ rawKey, data })
             setPhase('unlocked')
           }}
           onRestored={(restoredVault) => {
@@ -368,7 +405,7 @@ export default function App() {
             // Lock it. A BroadcastChannel does not deliver to its own sender.
             lockChannel?.postMessage('lock')
             setStored(restoredVault)
-            setMeta(freshPracticeMeta(restoredVault.createdAt))
+            startFreshSchedule(restoredVault.createdAt)
           }}
         />
       ) : null
@@ -399,13 +436,13 @@ export default function App() {
             // its own lie. A BroadcastChannel does not deliver to its own
             // sender, so this tab is unaffected.
             lockChannel?.postMessage('lock')
-            setUnlocked(null)
+            holdKey(null)
             setStored(null)
             setMeta(null)
             setPhase('welcome')
           }}
           onVaultChanged={(nextData, nextStored) => {
-            setUnlocked({ rawKey: unlocked.rawKey, data: nextData })
+            holdKey({ rawKey: unlocked.rawKey, data: nextData })
             setStored(nextStored)
           }}
         />
@@ -430,7 +467,7 @@ export default function App() {
             // this is belt and braces — but the belt is what stops a stale key
             // sitting in memory for five minutes after a phrase was burned.
             void clearPopupSession()
-            setUnlocked({ rawKey: nextKey, data: nextData })
+            holdKey({ rawKey: nextKey, data: nextData })
             setStored(nextStored)
             setMeta(freshPracticeMeta(Date.now()))
             // The note belongs to the unlock that re-keyed the vault, not to a

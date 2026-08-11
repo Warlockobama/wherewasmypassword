@@ -26,9 +26,32 @@ function area(name: StoreName): Map<string, unknown> {
   return disk.get(name)!
 }
 
+/**
+ * The next write, and only the next one, fails.
+ *
+ * Storage that refuses to write is otherwise unreachable from a test, and the
+ * screens have to tell those failures apart: a vault replaced underneath a flow
+ * is not the same event as a disk that said no, and until now only the first of
+ * the two could be provoked here.
+ */
+let failNextWrite: string | null = null
+
 /** Empty the fake disk. Call this in `beforeEach`. */
 export function resetFakeDb(): void {
   disk.clear()
+  failNextWrite = null
+}
+
+/** Make the next `put` reject, once. See `failNextWrite`. */
+export function failNextFakeDbWrite(message = 'the fake disk refused this write'): void {
+  failNextWrite = message
+}
+
+function refuseWriteIfArmed(): void {
+  if (failNextWrite === null) return
+  const message = failNextWrite
+  failNextWrite = null
+  throw new Error(message)
 }
 
 /** Put a record on the fake disk without going through `db.ts`. */
@@ -55,6 +78,7 @@ export function fakeIdbModule() {
   const objectStore = (name: StoreName) => ({
     get: async (key: string) => area(name).get(key),
     put: async (value: unknown, key: string) => {
+      refuseWriteIfArmed()
       area(name).set(key, value)
     },
     delete: async (key: string) => {
@@ -66,6 +90,7 @@ export function fakeIdbModule() {
     openDB: async () => ({
       get: async (name: StoreName, key: string) => area(name).get(key),
       put: async (name: StoreName, value: unknown, key: string) => {
+        refuseWriteIfArmed()
         area(name).set(key, value)
       },
       delete: async (name: StoreName, key: string) => {

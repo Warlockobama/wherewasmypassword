@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Palace from '../palace/Palace.tsx'
 import type { VaultData } from '../crypto/vault.ts'
 import { ClueCard, EmptySlot } from '../palace/rooms/shared.tsx'
@@ -61,6 +61,30 @@ export default function UnlockedHome({
   const [editingCred, setEditingCred] = useState<Credential | undefined>(undefined)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  /**
+   * The add/edit form, and the reason it needs a handle on itself.
+   *
+   * Both buttons that open it — Edit on the list, and Fix in the review panel —
+   * sit above it, and since the review panel went in between them the form can
+   * be a screenful further down than the button that opened it. Pressing a
+   * button and having nothing visibly happen is the same as a button that does
+   * not work, and for someone reading the page through a screen reader it is
+   * worse: focus stays on a button whose effect is somewhere they were not
+   * told about. So the form is scrolled to and its first field takes focus.
+   */
+  const formRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (formMode === 'hidden') return
+    const node = formRef.current
+    if (!node) return
+    // The wrapper is `display: contents` so it does not disturb the column's
+    // spacing, which also means it has no box to scroll to — the form itself
+    // does. Optional-called because jsdom has no layout and no
+    // `scrollIntoView`, and the screen suites render this component.
+    ;(node.firstElementChild ?? node).scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+    node.querySelector<HTMLElement>('input, textarea')?.focus({ preventScroll: true })
+  }, [formMode, editingCred])
 
   const clues = Object.fromEntries(
     LOCI.map((l) => {
@@ -244,23 +268,25 @@ export default function UnlockedHome({
         }}
       />
 
-      {formMode === 'add' && (
-        <CredentialForm
-          onSave={(f) => void handleAddCredential(f)}
-          onCancel={() => setFormMode('hidden')}
-        />
-      )}
+      <div ref={formRef} className="contents">
+        {formMode === 'add' && (
+          <CredentialForm
+            onSave={(f) => void handleAddCredential(f)}
+            onCancel={() => setFormMode('hidden')}
+          />
+        )}
 
-      {formMode === 'edit' && editingCred && (
-        <CredentialForm
-          initial={editingCred}
-          onSave={(f) => void handleEditCredential(f)}
-          onCancel={() => {
-            setFormMode('hidden')
-            setEditingCred(undefined)
-          }}
-        />
-      )}
+        {formMode === 'edit' && editingCred && (
+          <CredentialForm
+            initial={editingCred}
+            onSave={(f) => void handleEditCredential(f)}
+            onCancel={() => {
+              setFormMode('hidden')
+              setEditingCred(undefined)
+            }}
+          />
+        )}
+      </div>
 
       {saving && (
         <p className="text-sm text-dusk/60">Encrypting and saving...</p>
@@ -308,7 +334,19 @@ export default function UnlockedHome({
                 variant="secondary"
                 className="!border-brick !text-brick"
                 onClick={() => {
-                  void deleteVault().then(onDeleted)
+                  // The only destructive control here that used to report
+                  // nothing. `deleteVault` runs a two-store transaction and can
+                  // reject — a blocked upgrade, an aborted transaction — and
+                  // without this the panel simply sat there: no error, no
+                  // change, and a vault the user believes is gone.
+                  setError(null)
+                  void deleteVault()
+                    .then(onDeleted)
+                    .catch((err: unknown) =>
+                      setError(
+                        `Could not delete the vault: ${err instanceof Error ? err.message : String(err)}. It is still on this device.`,
+                      ),
+                    )
                 }}
               >
                 Yes, delete everything

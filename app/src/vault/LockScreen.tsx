@@ -4,6 +4,7 @@ import { decryptVault, fromBase64, WrongPassphraseError, type VaultData } from '
 import { parseBackup } from '../storage/backup.ts'
 import {
   loadArchivedVault,
+  loadVault,
   loadVaultSettings,
   VaultSupersededError,
   type StoredVault,
@@ -108,18 +109,50 @@ export default function LockScreen({
     if (!phrase.trim() || busy || undoBusy || restoreBusy) return
     setBusy(true)
     setError(null)
+    let rawKey: Uint8Array | undefined
     try {
-      const rawKey = await deriveKey(phrase, fromBase64(stored.salt), stored.kdfParams)
+      /**
+       * The record on disk, read now — not the one this screen was handed.
+       *
+       * `App` reads the vault once, when the page loads, and nothing on this
+       * path ever reads it again. So every way the live record can be replaced
+       * while a lock screen is on top of a stale copy of it ends the same way:
+       * a passphrase change in another tab, or in *this* tab before the idle
+       * timer fired, and the phrase the user has just spent a gauntlet
+       * memorising is rejected — while the phrase they were told is retired
+       * opens the vault, because the old record is still a perfectly
+       * self-consistent thing to decrypt. Everything after that compounds it:
+       * credentials from before the change, and every save refused.
+       *
+       * The popup already does this on every open. One IndexedDB read in front
+       * of an Argon2id derive costs nothing measurable.
+       */
+      const current = await loadVault()
+      if (!current) {
+        // Deleted from another copy of the UI while this screen sat here. There
+        // is nothing to open, and deriving against the snapshot would "unlock"
+        // a vault that is gone from the device.
+        setError(
+          'There is no vault on this device any more — it was deleted in another tab or window. Reload this page to start again.',
+        )
+        return
+      }
+      rawKey = await deriveKey(phrase, fromBase64(current.salt), current.kdfParams)
       const data = await decryptVault(
         rawKey,
-        { iv: fromBase64(stored.iv), ciphertext: fromBase64(stored.ciphertext) },
-        stored,
+        { iv: fromBase64(current.iv), ciphertext: fromBase64(current.ciphertext) },
+        current,
       )
       // Only now, with the phrase proven, can an old vault be moved to today's
       // key-derivation settings and vault format — deriving a new key needs the
       // phrase, and this is the only moment it is in hand (`decisions/0013`).
-      setUpgrading(upgradeNeeded(stored) !== 'none')
-      const brought = await upgradeOnUnlock(phrase, rawKey, data, stored)
+      setUpgrading(upgradeNeeded(current) !== 'none')
+      const brought = await upgradeOnUnlock(phrase, rawKey, data, current)
+      // `upgradeOnUnlock` returns the same key when it had nothing to do, and a
+      // fresh one when it re-keyed. Zeroing unconditionally in the `finally`
+      // below would wipe the key being handed to the app.
+      if (brought.rawKey !== rawKey) rawKey.fill(0)
+      rawKey = undefined
       if (!live.current) {
         // An undo swapped the vault out from under this unlock and took the
         // screen with it. The key opens a record that is no longer live.
@@ -135,6 +168,11 @@ export default function LockScreen({
           : `Unlock failed: ${err instanceof Error ? err.message : String(err)}`,
       )
     } finally {
+      // A wrong phrase leaves a worthless key, but `decryptVault` also throws
+      // `DamagedVaultError` *after* GCM has authenticated — which means the
+      // live vault key, sitting in the heap of a screen whose whole contract is
+      // that it holds nothing, and a fresh one minted on every retry.
+      rawKey?.fill(0)
       setBusy(false)
       setUpgrading(false)
     }
