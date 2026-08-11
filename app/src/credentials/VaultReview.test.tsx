@@ -126,19 +126,39 @@ describe('VaultReview', () => {
   it('hands the real credential back when Fix is pressed', () => {
     const forum = cred({ label: 'Forum', password: '123456' })
     const onEdit = renderReview([cred({ label: 'Bank', password: 'Kq7!vRt2Ls9#xB' }), forum])
-    fireEvent.click(screen.getByRole('button', { name: 'Fix' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Fix Forum' }))
     // The same object the list passes to the edit form, so Fix and Edit open
     // the identical screen.
     expect(onEdit).toHaveBeenCalledWith(forum)
   })
 
-  it('offers a Fix button for every flagged entry and none for the rest', () => {
+  it('gives every Fix button an accessible name of its own', () => {
+    // On screen they all read "Fix", which is right beside the label. To anyone
+    // navigating by button — a screen reader's list, or voice control saying
+    // "click Fix" — identical names mean N indistinguishable targets, and the
+    // cost of picking the wrong one is editing the wrong password.
     renderReview([
       cred({ label: 'Bank', password: 'Kq7!vRt2Ls9#xB' }),
       cred({ label: 'Forum', password: '123456' }),
       cred({ label: 'Shop', password: 'monkey1' }),
     ])
-    expect(screen.getAllByRole('button', { name: 'Fix' })).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Fix Forum' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Fix Shop' })).toBeTruthy()
+    // And none for the entry with nothing to fix.
+    expect(screen.queryByRole('button', { name: 'Fix Bank' })).toBeNull()
+    expect(screen.getAllByRole('button', { name: /^Fix / })).toHaveLength(2)
+  })
+
+  it('opens the right entry when two credentials share an id', () => {
+    // An import can hand two entries the same id; `auditVault` treats them as
+    // two entries on purpose. Looking the credential back up by id would give
+    // both rows the last of the pair — and `editCredential` patches every entry
+    // with that id, so one Fix would rewrite both passwords.
+    const bank = cred({ label: 'Bank', password: 'shared-9127-shared', id: 'dup' })
+    const router = cred({ label: 'Router', password: 'shared-9127-shared', id: 'dup' })
+    const onEdit = renderReview([bank, router])
+    fireEvent.click(screen.getByRole('button', { name: 'Fix Bank' }))
+    expect(onEdit).toHaveBeenCalledWith(bank)
   })
 
   it('reports several findings on one entry rather than only the worst', () => {

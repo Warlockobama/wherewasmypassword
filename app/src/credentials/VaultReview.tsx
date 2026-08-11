@@ -36,7 +36,6 @@ export default function VaultReview({
   // empty list is just furniture.
   if (credentials.length === 0) return null
 
-  const byId = new Map(credentials.map((c) => [c.id, c]))
   const { counts, flagged } = audit
 
   return (
@@ -52,10 +51,15 @@ export default function VaultReview({
       {flagged.length > 0 && (
         <ul className="space-y-2">
           {flagged.map((entry) => {
-            const cred = byId.get(entry.credentialId)
+            // By position, never by id. Two entries can carry the same id — an
+            // import is all it takes — and the audit is careful to treat them as
+            // two entries; a lookup by id here would hand both Fix buttons the
+            // same credential, and `editCredential` patches every entry with a
+            // matching id, so one press would rewrite both passwords.
+            const cred = credentials[entry.index]
             return (
               <li
-                key={entry.credentialId}
+                key={entry.index}
                 className="rounded-lg border-2 border-dusk/20 bg-parchment/60 p-3"
               >
                 <div className="flex items-start justify-between gap-2">
@@ -67,6 +71,11 @@ export default function VaultReview({
                     <Button
                       variant="secondary"
                       className="!shrink-0 !px-3 !py-1 !text-sm"
+                      // Every row's button says "Fix", so by itself the name is
+                      // useless to anyone reading the page through a screen
+                      // reader or driving it by voice — N identical targets,
+                      // and picking the wrong one opens the wrong password.
+                      aria-label={`Fix ${entry.label}`}
                       onClick={() => onEdit(cred)}
                     >
                       Fix

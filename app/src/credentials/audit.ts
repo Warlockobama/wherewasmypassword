@@ -95,6 +95,18 @@ export interface Finding {
 
 export interface CredentialAudit {
   credentialId: string
+  /**
+   * Position in the `credentials` array this audit was made from.
+   *
+   * Carried because `credentialId` is not reliably unique — the reuse grouping
+   * below excludes an entry from its own group by position for exactly that
+   * reason, since excluding by id let two entries sharing an id hide the reuse
+   * between them. A panel that then looked an entry back up by id would undo
+   * that: `new Map(credentials.map(c => [c.id, c]))` keeps the last of a
+   * duplicate pair, so the Fix button on the first row would open the second
+   * row's entry — and the edit that followed would patch both.
+   */
+  index: number
   label: string
   length: number
   /**
@@ -231,18 +243,40 @@ export function ceilingBits(password: string): number {
  * distinct from `single-class`: a bare lowercase word is a different complaint.
  */
 /**
- * Built once rather than per call. The digit run is generous on purpose: capping
- * it low means one digit past the cap drops the finding altogether rather than
- * degrading it, so `password1234` was caught and `password12345` was clean.
+ * Built once rather than per call.
+ *
+ * The runs of decoration are unbounded on purpose, and that is the whole lesson
+ * of this rule: it is anchored at both ends, so decoration it does not model
+ * does not weaken the match, it *removes* it. A digit cap meant `password1234`
+ * was caught and `password12345` was clean; raising the cap to eight only moved
+ * the cliff, and a symbol cap of two left `Password123!` flagged while
+ * `Password123!!!` — the same password, one keypress more emphatic — came back
+ * with nothing to say. Runs that end the string cost a guess nothing, so there
+ * is no length at which they should buy silence.
+ *
+ * The three things that *are* modelled beyond the bare word: an all-caps run
+ * (`PASSWORD2024`, which one leading `[A-Z]?` cannot reach), a single separator
+ * between the word and its digits (`Summer-2024!`, `summer 2024`), and either
+ * kind of trailing run in any amount.
+ *
+ * The word-run cap is different in kind and stays: it is what keeps a
+ * run-together diceware phrase with a `!` on the end out of the finding
+ * (`WORD_RUN_MAX`). And an anchored rule always has an edge somewhere —
+ * `Sunshine_2024ab` is still clean, because letters after the digits are a
+ * shape this does not claim to know. What it must not have is an edge that a
+ * *more* decorated password falls off.
  */
 const DECORATED_WORD = new RegExp(
-  `^[A-Z]?[a-z]{2,${WORD_RUN_MAX}}([0-9]{0,8})([^A-Za-z0-9]{0,2})$`,
+  `^(?:[A-Z]?[a-z]{2,${WORD_RUN_MAX}}|[A-Z]{2,${WORD_RUN_MAX}})([^A-Za-z0-9]?)([0-9]*)([^A-Za-z0-9]*)$`,
 )
 
 function looksLikeDecoratedWord(password: string): boolean {
   const match = DECORATED_WORD.exec(password)
   if (!match) return false
-  return match[1].length + match[2].length >= 1
+  // A bare word is `single-class`'s complaint, not this one; the decoration is
+  // what makes the shape worth naming. The separator counts as decoration —
+  // `summer-` is a word someone dressed up, however thinly.
+  return match[1].length + match[2].length + match[3].length >= 1
 }
 
 /**
@@ -382,7 +416,20 @@ export function auditVault(credentials: Credential[], masterWords: string[]): Va
    * is `critical [short, repeat]` and the other is a clean sixteen-character
    * password — the same password, two opposite verdicts.
    */
-  const normalised = credentials.map((cred) => cred.password.normalize('NFC'))
+  const normalised = credentials.map((cred) =>
+    // Typed as a string, but this vault may have been restored from a file this
+    // app did not write: `decryptVault` checks that `entries` is an array and
+    // stops there. A missing password used to throw here, and with no error
+    // boundary anywhere in the app that took the whole unlocked screen down —
+    // a vault that decrypts perfectly, rendering as a blank page. An entry with
+    // no password is instead the empty string, which the rules below already
+    // have an answer for.
+    (typeof cred.password === 'string' ? cred.password : '').normalize('NFC'),
+  )
+  // Same reasoning, and the sort at the bottom calls `localeCompare` on it.
+  const labels = credentials.map((cred) =>
+    typeof cred.label === 'string' && cred.label !== '' ? cred.label : 'Untitled entry',
+  )
 
   // Grouped on the exact string: two passwords differing by one character are
   // two passwords, and treating them as related would need the fuzzy matching
@@ -402,16 +449,23 @@ export function auditVault(credentials: Credential[], masterWords: string[]): Va
     // the same id still count as two entries. Excluding by id let a duplicate
     // id hide the reuse entirely.
     const group = byPassword.get(password) ?? []
-    const others = group.filter((i) => i !== index)
-    const findings = auditPassword(
-      password,
-      foldedMaster,
-      others.slice(0, REUSE_NAMES_KEPT).map((i) => credentials[i].label),
-      others.length,
-    )
+    // Counted and scanned rather than filtered. `group.filter(i => i !== index)`
+    // built a copy of the whole group for every member of it before four names
+    // were taken off the front and the rest thrown away — quadratic work on the
+    // synchronous render path, which is half a second of a frozen screen on the
+    // eight-thousand-entry import this finding exists for. The count is
+    // arithmetic and the names are the first few of a list already in hand.
+    const sharedTotal = group.length > 0 ? group.length - 1 : 0
+    const sharedWith: string[] = []
+    for (const i of group) {
+      if (sharedWith.length >= REUSE_NAMES_KEPT) break
+      if (i !== index) sharedWith.push(labels[i])
+    }
+    const findings = auditPassword(password, foldedMaster, sharedWith, sharedTotal)
     return {
       credentialId: cred.id,
-      label: cred.label,
+      index,
+      label: labels[index],
       length: [...password].length,
       ceilingBits: ceilingBits(password),
       classes: characterClasses(password),

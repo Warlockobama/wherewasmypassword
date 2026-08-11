@@ -348,6 +348,42 @@ describe('the ways the rules were wrong', () => {
     expect(kindsOf('password12345')).toContain('predictable-shape')
   })
 
+  it('does not let extra punctuation buy silence either', () => {
+    // The same cliff, one cap over: the symbol run was capped at two, so
+    // `Password123!` was flagged and `Password123!!!` — the same password,
+    // typed more emphatically — came back with nothing to say. There is no
+    // number of trailing exclamation marks that makes a password less guessable,
+    // so there is no cap at which the finding should switch off.
+    for (const password of [
+      'Password123!',
+      'Password123!!!',
+      'Password2024$$$',
+      'Baseball99!!!!',
+      'Password123!?!',
+    ]) {
+      expect(kindsOf(password)).toContain('predictable-shape')
+    }
+  })
+
+  it('sees the same shape shouted, and with a separator in the middle', () => {
+    // One leading `[A-Z]?` cannot reach an all-caps word, and nothing modelled
+    // the separator a person puts between the word and the year. Every one of
+    // these was clean, and every one is the shape a site's complexity rule
+    // produces.
+    for (const password of [
+      'PASSWORD1234',
+      'PASSWORD2024!',
+      'Summer 2024!',
+      'summer-2024!!',
+      'Sunshine_2024',
+    ]) {
+      expect(kindsOf(password)).toContain('predictable-shape')
+    }
+    // And the word run is still capped, which is what keeps a run-together
+    // diceware phrase out of this finding however it is decorated.
+    expect(kindsOf('walnuttrellisharbourkiln-2024!!')).toHaveLength(0)
+  })
+
   it('does not call a run-together passphrase with a trailing mark a decorated word', () => {
     // The false positive that matters most, because it fires on the advice this
     // app gives. These are four random words and ~145 ceiling bits; being told
@@ -410,5 +446,56 @@ describe('the ways the rules were wrong', () => {
     )
     expect(pair.all[0].findings[0].sharedTotal).toBe(1)
     expect(pair.all[0].findings[0].sharedWith).toEqual(['B'])
+  })
+
+  it('carries the position of each entry, not only its id', () => {
+    // The panel has to get from a finding back to the credential it is about,
+    // and `credentialId` cannot do that job: two entries can share an id, and a
+    // lookup by id keeps the last of the pair. Both Fix buttons then opened the
+    // same entry — and an edit patches every entry with that id, so one press
+    // rewrote both passwords.
+    const audit = auditVault(
+      [
+        { ...cred({ label: 'Bank', password: 'shared-9127-shared' }), id: 'dup' },
+        { ...cred({ label: 'Router', password: 'shared-9127-shared' }), id: 'dup' },
+      ],
+      MASTER,
+    )
+    expect(audit.all.map((a) => a.index)).toEqual([0, 1])
+    expect(audit.flagged.map((a) => a.index).sort()).toEqual([0, 1])
+  })
+
+  it('survives an entry that a vault this app did not write could contain', () => {
+    // `decryptVault` checks that `entries` is an array and no further, and there
+    // is no error boundary anywhere in the app — so a missing password threw
+    // here and took the whole unlocked screen down with it: a vault that
+    // decrypts perfectly, rendering as a blank page.
+    const malformed = [
+      { id: 'a', label: 'No password', url: '', username: '', notes: '', createdAt: 0, updatedAt: 0 },
+      { id: 'b', password: 'Kq7!vRt2Ls9#xB', url: '', username: '', notes: '', createdAt: 0, updatedAt: 0 },
+    ] as unknown as Parameters<typeof auditVault>[0]
+    const audit = auditVault(malformed, MASTER)
+    expect(audit.counts.total).toBe(2)
+    // An entry with no password reads as an empty one, which the rules already
+    // have an answer for, and an entry with no label still has to be nameable.
+    expect(audit.all[0].findings.map((f) => f.kind)).toContain('short')
+    expect(audit.all[1].label).toBe('Untitled entry')
+  })
+
+  it('stays linear when one password is on thousands of entries', () => {
+    // `group.filter(i => i !== index)` copied the whole group for every member
+    // of it before four names were taken off the front — quadratic work inside
+    // a `useMemo` on the unlocked screen, which is the screen freezing for half
+    // a second on exactly the import this finding exists to catch.
+    const many = Array.from({ length: 4000 }, (_, i) =>
+      cred({ label: `Site ${i}`, password: 'one-for-all-9127' }),
+    )
+    const started = Date.now()
+    const audit = auditVault(many, MASTER)
+    // Deliberately loose: this is here to catch a return to quadratic, which was
+    // half a second at this size and four seconds at twice it — not to police
+    // milliseconds on whatever machine happens to run the suite.
+    expect(Date.now() - started).toBeLessThan(1000)
+    expect(audit.all[0].findings.find((f) => f.kind === 'reused')?.sharedTotal).toBe(3999)
   })
 })
