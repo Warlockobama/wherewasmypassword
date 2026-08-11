@@ -1,0 +1,18 @@
+# Line endings, and why a password manager cares.
+#
+# `npm run package` is reproducible on purpose: every zip entry is stamped
+# 1980-01-01 so that building the same commit twice gives the same SHA-256, and
+# the README tells a stranger they can check out the tag, package, and compare
+# rather than trusting the download (`decisions/0022`, `scripts/package.mjs`).
+#
+# That promise was quietly untrue on Windows. `public/` files — `background.js`,
+# `content.js`, `manifest.json` — are copied into `dist/` byte for byte, so
+# whatever line endings the *checkout* produced are the line endings that ship.
+# With `core.autocrlf=true`, the Windows default, a fresh checkout writes CRLF
+# where the tree that built the published archive had LF: same commit, same
+# tools, different bytes, different checksum (`decisions/0028`).
+#
+# So the checkout is pinned instead of the developer's config. LF everywhere,
+# on every platform, whatever `core.autocrlf` says — `eol` overrides it. Binary
+# files are detected by `text=auto` and left alone.
+* text=auto eol=lf

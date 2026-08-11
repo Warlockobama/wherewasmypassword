@@ -28,6 +28,11 @@
  *    on every website" must not be the one that gets a download link.
  *  - Source maps. They are not emitted today; if they ever are, they do not
  *    belong in a shipped artifact.
+ *  - A version that already has a tag, from a tree that is not that tag. Two
+ *    different archives called 1.1.0 is the one thing that makes the published
+ *    checksum worthless, and `decisions/0027` (ship the review later) is exactly
+ *    the shape of decision that leaves master ahead of its version number. See
+ *    `scripts/release-guard.mjs`.
  *
  * Exits non-zero if any of that fails, having written nothing.
  */
@@ -37,6 +42,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join, dirname, resolve, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { OVERRIDE, repackageProblem, tagFacts } from './release-guard.mjs'
 
 const APP_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DIST = join(APP_DIR, 'dist')
@@ -89,6 +95,15 @@ async function main() {
   if (maps.length) {
     problems.push(`the build emitted source maps: ${maps.map((f) => relative(DIST, f)).join(', ')}`)
   }
+
+  // Asked of git rather than of the tree, and only when the version already has
+  // a tag — see `scripts/release-guard.mjs` for why this is a refusal.
+  const repackage = repackageProblem({
+    version: manifest.version,
+    ...tagFacts(manifest.version, APP_DIR),
+    override: Boolean(process.env[OVERRIDE]),
+  })
+  if (repackage) problems.push(repackage)
 
   if (problems.length) {
     console.error(`Refusing to package — ${problems.length} problem(s):`)
