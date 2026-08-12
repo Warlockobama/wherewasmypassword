@@ -1,4 +1,8 @@
 import { readFileSync } from 'node:fs'
+// Imported rather than taken as a global: `tsconfig` deliberately keeps node's
+// globals out of a codebase that runs in a browser, so this file names what it
+// borrows from the test runner's side of the fence.
+import { setImmediate } from 'node:timers'
 import { beforeEach, describe, expect, it } from 'vitest'
 
 /**

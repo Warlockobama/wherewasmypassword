@@ -26,3 +26,6 @@
 - 2026-08-09 RESOLVED 0025-revoke-the-prototypes-google-maps-key.md — 1. **James ruled: "get rid of it".** Revoke the prototype Google Maps API key in Google Cloud (APIs & Services → Credent
 - 2026-08-09 RESOLVED 0026-the-queue-is-empty-again-what-next.md — 1. **James said: "your call".** Proceed with the recommended default direction.
 - 2026-08-11 RESOLVED 0027-does-the-review-panel-warrant-a-release.md — 1. **Ruling:** Let it ride for now. James said "yeah, let it ride for now," so do not cut v1.2.0 yet; keep v1.1.0 as the
+- 2026-08-12 RESOLVED 0028-the-published-checksum-cannot-be-reproduced.md — 1. **Amend the v1.1.0 release notes.** James said "we will create a note in the release note for that particular release
+- 2026-08-12 RESOLVED 0029-ordinary-use-retires-the-practice-ladder.md — 1. **Leave it as-is.** James said users who use it a lot probably don’t need the practice, and frequent unlocking can co
+- 2026-08-12 RESOLVED 0030-three-judgement-calls-in-the-password-review.md — 1. **Adopt the recommended changes.** James said "yeah, go with that", so implement the three recommended adjustments: e

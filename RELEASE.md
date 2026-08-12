@@ -50,6 +50,13 @@ commit anyone can check out, not a state of somebody's laptop.
    npm run package
    ```
 
+   It type-checks with `tsc -b --force` rather than the ordinary incremental
+   build, and that word is load-bearing: `tsconfig.tsbuildinfo` is gitignored,
+   so a developer's tree can consider itself checked while a fresh clone of the
+   same commit does not compile at all. That is not hypothetical — it is how
+   v1.1.0 shipped a tree that `npm ci && npm run build` rejects. A release
+   should not be the one build nobody re-checked.
+
    Builds, then writes `release/wherewasmypassword-<version>.zip` and a
    `.sha256` beside it. It refuses to package a build whose manifest asks for
    any permission set other than exactly `activeTab`, `scripting`, `storage`
@@ -111,6 +118,12 @@ commit anyone can check out, not a state of somebody's laptop.
    and the two things a person is owed before they trust a password manager
    with a zip: that it never auto-updates, and that a vault is local to the
    browser profile it was created in.
+
+   Keep the notes in `release-notes/v<version>.md` and publish from that file.
+   They are the one part of a release that can be edited after the fact, and
+   `decisions/0028` is the case for wanting the edit reviewable: when v1.1.0's
+   reproducibility claim turned out to be false, correcting it meant rewriting a
+   page whose previous wording existed nowhere but GitHub.
 
 ## When the store question comes back
 
