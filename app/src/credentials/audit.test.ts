@@ -193,7 +193,8 @@ describe('reuse', () => {
     )
     expect(audit.all.map((a) => a.length)).toEqual([12, 11])
     expect(audit.all[0].findings.map((f) => f.kind)).toEqual(['reused'])
-    // The untrimmed one is eleven characters, and `short` still fires on it.
+    // The one with no space to trim is eleven characters, and `short` still
+    // fires on it — the trimming reached the grouping key and stopped there.
     expect(audit.all[1].findings.map((f) => f.kind)).toEqual(['reused', 'short'])
   })
 

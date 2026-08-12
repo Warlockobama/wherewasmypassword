@@ -97,19 +97,27 @@ and the order, which was the module's own rule for it.
 **2. Reuse.** Grouping is on `password.trim()` and nothing else is. Length,
 shape, class count and the master-phrase comparison all still see the string as
 stored, because the space really is in what the site was given: `Kq7!vRt2Ls9 `
-is twelve characters and its untrimmed twin is eleven, so `short` still fires on
-one and not the other. A password that is *only* whitespace groups with nothing,
-for the same reason an empty one does not.
+is twelve characters and the twin without the space is eleven, so `short` still
+fires on one and not the other. A password that is *only* whitespace groups with
+nothing, for the same reason an empty one does not.
 
-**3. Contrast.** Measured against the real composite — `bg-parchment-dark/60`
-over `bg-parchment`, tints and text opacities blended — rather than against the
-panel colour named in the markup:
+**3. Contrast.** Measured against the real composite — every layer the pixel
+actually has under it, tints and text opacities blended — rather than against the
+colour named in the markup:
 
-| element | before | now |
-|---|---|---|
-| "Fix this first" | 3.08:1 | **5.06:1** |
-| "Minor" | 3.56:1 | **7.16:1** |
-| the "what this cannot see" caveat | 2.97:1 | **4.70:1** |
+| element | sits on | before | now |
+|---|---|---|---|
+| "Fix this first" | badge tint over the row over the panel | 3.23:1 | **5.31:1** |
+| "Minor" | badge tint over the row over the panel | 3.66:1 | **7.53:1** |
+| the "what this cannot see" caveat | the panel | 2.97:1 | **4.70:1** |
+
+The two badges are inside a flagged row (`bg-parchment/60`), which sits on the
+panel (`bg-parchment-dark/60` over `bg-parchment`); the caveat is on the panel
+directly. An earlier version of this table measured the badges on the panel
+without the row — 5.06:1 and 7.16:1, a slightly darker background and so a
+stricter floor. Both readings clear 4.5:1, which is what the ruling asked for.
+"Worth changing" was already `text-dusk` and needed no change; it computes to
+7.66:1 on its own tint.
 
 The badges keep their tint and border; only the words darkened. "Minor" and the
 caveat needed no new colour — `text-dusk` and `text-dusk/80`, the weight the
