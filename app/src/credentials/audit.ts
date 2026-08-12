@@ -175,6 +175,18 @@ const CLASS_ADVICE_CEILING = 16
 const SINGLE_CLASS_BITS_FLOOR = 70
 
 /**
+ * …and below *this* ceiling, "Minor" is the wrong word entirely.
+ *
+ * `4111111111111111` — sixteen digits, 53 bits, a card number — was reported in
+ * the same breath as "you could add a capital". Fifty bits is a password an
+ * offline attack finishes, and the panel's severity is what the user reads
+ * (`decisions/0030`). The ceiling still never appears in the copy; it is allowed
+ * to order the list rather than to describe anything, which is the line the
+ * module drew for it in the first place.
+ */
+const SINGLE_CLASS_SERIOUS_BITS = 60
+
+/**
  * How many other entries a `reused` finding names before it starts counting
  * instead. Four is what the sentence can carry out loud; past that "and 96
  * others" is both shorter and more alarming, which is the correct effect.
@@ -381,9 +393,13 @@ function auditPassword(
     // as a run rather than as "you only used one character class".
     const classes = characterClasses(password)
     const count = Object.values(classes).filter(Boolean).length
-    const thin = length < CLASS_ADVICE_CEILING || ceilingBits(password) < SINGLE_CLASS_BITS_FLOOR
+    const bits = ceilingBits(password)
+    const thin = length < CLASS_ADVICE_CEILING || bits < SINGLE_CLASS_BITS_FLOOR
     if (count === 1 && length > 0 && thin) {
-      findings.push({ kind: 'single-class', severity: 'minor' })
+      findings.push({
+        kind: 'single-class',
+        severity: bits < SINGLE_CLASS_SERIOUS_BITS ? 'serious' : 'minor',
+      })
     }
   }
 
@@ -431,16 +447,27 @@ export function auditVault(credentials: Credential[], masterWords: string[]): Va
     typeof cred.label === 'string' && cred.label !== '' ? cred.label : 'Untitled entry',
   )
 
-  // Grouped on the exact string: two passwords differing by one character are
-  // two passwords, and treating them as related would need the fuzzy matching
-  // this pass deliberately does not do.
+  // Grouped on the exact string, with surrounding whitespace off the key and
+  // nothing else: two passwords differing by one character are two passwords,
+  // and treating them as related would need the fuzzy matching this pass
+  // deliberately does not do. A trailing space is different in kind — it is what
+  // a copy-paste or a phone keyboard does to the *same* password, not a
+  // different one someone chose, and without this `x` and `x ` on two sites were
+  // reported as two unrelated passwords, both clean (`decisions/0030`).
+  //
+  // The key and only the key. Length, shape, the class count and the
+  // master-phrase comparison all keep seeing the string as it is stored, because
+  // the space really is in the password the site was given.
+  const groupKey = (password: string) => password.trim()
   const byPassword = new Map<string, number[]>()
   normalised.forEach((password, index) => {
-    // An entry with no password is not "shared with" every other empty one.
-    if (password === '') return
-    const group = byPassword.get(password)
+    // An entry with no password is not "shared with" every other empty one —
+    // and after trimming, neither is one that is nothing but spaces.
+    const key = groupKey(password)
+    if (key === '') return
+    const group = byPassword.get(key)
     if (group) group.push(index)
-    else byPassword.set(password, [index])
+    else byPassword.set(key, [index])
   })
 
   const all = credentials.map((cred, index) => {
@@ -448,7 +475,7 @@ export function auditVault(credentials: Credential[], masterWords: string[]): Va
     // Grouped by position rather than by id, so that two entries an import gave
     // the same id still count as two entries. Excluding by id let a duplicate
     // id hide the reuse entirely.
-    const group = byPassword.get(password) ?? []
+    const group = byPassword.get(groupKey(password)) ?? []
     // Counted and scanned rather than filtered. `group.filter(i => i !== index)`
     // built a copy of the whole group for every member of it before four names
     // were taken off the front and the rest thrown away — quadratic work on the

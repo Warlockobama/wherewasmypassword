@@ -99,7 +99,10 @@ export default function VaultReview({
           entry with no row above it has passed the checks this page can run,
           and the gap between that and "strong" is exactly what a review panel
           is tempted to paper over. */}
-      <p className="text-xs text-dusk/60">
+      {/* At `/60` this computed to 2.9:1 over the panel — the least legible text
+          on a panel whose whole argument it carries (`decisions/0030`). `/80` is
+          what the body copy above already uses, and it passes AA. */}
+      <p className="text-xs text-dusk/80">
         This looks at length, at the mix of characters, at a few shapes that are
         guessed first, and at whether a password is used twice. It cannot tell you
         whether one has appeared in a breach or is simply a common choice — that
@@ -113,12 +116,15 @@ export default function VaultReview({
 
 function VerdictTag({ verdict }: { verdict: Verdict }) {
   if (verdict === 'ok') return null
+  // The tint and the border stay; only the words darken. Both of these were
+  // under 4.5:1 on their own background (`decisions/0030`) — a severity label
+  // nobody can read is the one piece of text on the row that has to carry.
   const style =
     verdict === 'critical'
-      ? 'border-brick/60 bg-brick/10 text-brick'
+      ? 'border-brick/60 bg-brick/10 text-brick-deep'
       : verdict === 'serious'
         ? 'border-amber-glow/60 bg-amber-glow/10 text-dusk'
-        : 'border-dusk/30 bg-dusk/5 text-dusk/70'
+        : 'border-dusk/30 bg-dusk/5 text-dusk'
   const word = verdict === 'critical' ? 'Fix this first' : verdict === 'serious' ? 'Worth changing' : 'Minor'
   return (
     <span className={`mt-0.5 inline-block rounded border px-1.5 py-0.5 text-xs font-semibold ${style}`}>

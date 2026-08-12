@@ -161,6 +161,50 @@ describe('reuse', () => {
     expect(audit.flagged).toHaveLength(0)
   })
 
+  it('sees through surrounding whitespace, which is not a password someone chose', () => {
+    // `decisions/0030`. A trailing space is what a copy-paste or a phone
+    // keyboard adds to the *same* password; before this these were two
+    // unrelated passwords and the panel had nothing to say about either.
+    const audit = auditVault(
+      [
+        cred({ label: 'Bank', password: 'Shared-Password-9127' }),
+        cred({ label: 'Router', password: 'Shared-Password-9127 ' }),
+        cred({ label: 'Mail', password: '\tShared-Password-9127\n' }),
+      ],
+      MASTER,
+    )
+    expect(audit.all[0].findings.find((f) => f.kind === 'reused')?.sharedWith).toEqual([
+      'Router',
+      'Mail',
+    ])
+    expect(audit.counts.flagged).toBe(3)
+  })
+
+  it('trims the grouping key and nothing else', () => {
+    // The space is still in the password the site was given, so everything that
+    // measures the string keeps seeing it: eleven characters plus a space is a
+    // twelve-character password, not a short one.
+    const audit = auditVault(
+      [
+        cred({ label: 'A', password: 'Kq7!vRt2Ls9 ' }),
+        cred({ label: 'B', password: 'Kq7!vRt2Ls9' }),
+      ],
+      MASTER,
+    )
+    expect(audit.all.map((a) => a.length)).toEqual([12, 11])
+    expect(audit.all[0].findings.map((f) => f.kind)).toEqual(['reused'])
+    // The untrimmed one is eleven characters, and `short` still fires on it.
+    expect(audit.all[1].findings.map((f) => f.kind)).toEqual(['reused', 'short'])
+  })
+
+  it('does not tie together entries whose passwords are only whitespace', () => {
+    const audit = auditVault(
+      [cred({ label: 'A', password: '   ' }), cred({ label: 'B', password: ' ' })],
+      MASTER,
+    )
+    expect(audit.all.every((a) => a.findings.every((f) => f.kind !== 'reused'))).toBe(true)
+  })
+
   it('does not tie together entries that have no password at all', () => {
     const audit = auditVault(
       [cred({ label: 'A', password: '' }), cred({ label: 'B', password: '' })],
@@ -222,6 +266,24 @@ describe('shape', () => {
     // Twenty lowercase letters, and not a run — past the length where "add a
     // symbol" is advice worth giving.
     expect(kindsOf('walnuttrellisharbour')).not.toContain('single-class')
+  })
+
+  it('stops calling a single class "Minor" once the ceiling falls far enough', () => {
+    // `decisions/0030`: a card number is 53 bits, and "Only one kind of
+    // character" over the word Minor was the whole of what the panel said about
+    // it. The ceiling still never reaches the copy — it decides the label and
+    // the order, nothing else.
+    const severityOf = (password: string) =>
+      auditVault([cred({ label: 'Site', password })], MASTER).all[0].findings.find(
+        (f) => f.kind === 'single-class',
+      )?.severity
+
+    expect(severityOf('4111111111111111')).toBe('serious')
+    expect(severityOf('123456789012345')).toBe('serious')
+    // Thirteen lowercase letters is 61 bits — thin enough to mention, not thin
+    // enough to alarm. This is the line, and it is worth a test because moving
+    // it is how the panel starts shouting at passwords that are merely plain.
+    expect(severityOf('lowercaseonly')).toBe('minor')
   })
 })
 

@@ -1,6 +1,6 @@
 # 0030 — Three judgement calls left in the password review
 
-**Status:** OPEN — three small product calls, one doc, none of them blocking.
+**Status:** RESOLVED (user call, 2026-08-12) — see the resolution at the bottom.
 
 ## Why this exists
 
@@ -77,3 +77,46 @@ as its own piece of work if James wants one.
 
 Any answer, including "just the third one" or "your call". Each is small enough
 to land in an afternoon and none blocks anything else.
+
+## RESOLUTION (user call, 2026-08-12 — via exec assistant)
+
+1. **Adopt the recommended changes.** James said "yeah, go with that", so implement the three recommended adjustments: escalate `single-class` severity when `ceilingBits` is well below the floor, trim surrounding whitespace only for the reuse grouping key (not for stored-string checks like length, shape, or master-phrase comparison), and darken the panel badges and the "what this cannot see" caveat for contrast within the panel.
+2. **No app-wide visual sweep in this change.** Keep the contrast update scoped to the panel; any broader palette/contrast pass is a separate future decision or task.
+
+## What was done (2026-08-12)
+
+All three, as recommended, and nothing outside the panel moved.
+
+**1. Severity.** `single-class` is `serious` below `SINGLE_CLASS_SERIOUS_BITS`
+(60) and `minor` above it. `4111111111111111` (53 bits) and
+`123456789012345` (50) now sort with the findings that matter; `lowercaseonly`
+(61) stays Minor, which is the line the test pins so that moving it is a
+deliberate act. The ceiling still never reaches the copy — it chooses the label
+and the order, which was the module's own rule for it.
+
+**2. Reuse.** Grouping is on `password.trim()` and nothing else is. Length,
+shape, class count and the master-phrase comparison all still see the string as
+stored, because the space really is in what the site was given: `Kq7!vRt2Ls9 `
+is twelve characters and its untrimmed twin is eleven, so `short` still fires on
+one and not the other. A password that is *only* whitespace groups with nothing,
+for the same reason an empty one does not.
+
+**3. Contrast.** Measured against the real composite — `bg-parchment-dark/60`
+over `bg-parchment`, tints and text opacities blended — rather than against the
+panel colour named in the markup:
+
+| element | before | now |
+|---|---|---|
+| "Fix this first" | 3.08:1 | **5.06:1** |
+| "Minor" | 3.56:1 | **7.16:1** |
+| the "what this cannot see" caveat | 2.97:1 | **4.70:1** |
+
+The badges keep their tint and border; only the words darkened. "Minor" and the
+caveat needed no new colour — `text-dusk` and `text-dusk/80`, the weight the
+body copy beside them already uses. `brick` as *text* cannot reach 4.5:1 on its
+own tint at any opacity, so `--color-brick-deep` (`#8a4630`) exists for that one
+job and says so where it is declared. It is used by this panel and nowhere else,
+which is what keeps the ruling's second half true.
+
+**Status:** RESOLVED, and the app-wide `text-dusk/50`–`/60` question the doc
+raised is left where James put it — a separate piece of work, not started.

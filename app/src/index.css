@@ -9,6 +9,12 @@
   --color-sage: #7a9e7e;
   --color-dusk: #4a3f63;
   --color-brick: #b5654a;
+  /* Brick is a fill and a border colour: as text on a brick-tinted background it
+     reaches 2.9:1, and WCAG AA wants 4.5:1 for anything normal-sized. This is
+     the same red carried far enough down to be read — 5.1:1 on the review
+     panel's "Fix this first" badge (`decisions/0030`). It is not a replacement
+     for `brick`; it is what `brick` becomes when it has to be a word. */
+  --color-brick-deep: #8a4630;
 }
 
 html, body, #root {
