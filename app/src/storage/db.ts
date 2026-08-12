@@ -373,6 +373,37 @@ export async function savePracticeMeta(meta: PracticeMeta): Promise<void> {
   await (await db()).put('meta', meta, META_KEY)
 }
 
+/**
+ * Read the practice record, hand it to `advance`, and write the result back
+ * inside one transaction.
+ *
+ * `loadPracticeMeta` then `savePracticeMeta` is two transactions with a gap in
+ * the middle, and the tab and the popup are separate contexts over one
+ * database: both can read count *n* and both write *n + 1*, losing a tick
+ * (`decisions/0029`). IndexedDB runs readwrite transactions over a store one at
+ * a time, so keeping the read and the write in the same one means the second
+ * unlock reads what the first wrote.
+ *
+ * `advance` must be synchronous — awaiting anything that is not a request on
+ * this transaction lets it close underneath the write.
+ */
+export async function updatePracticeMeta(
+  advance: (current: PracticeMeta | undefined) => PracticeMeta,
+): Promise<PracticeMeta> {
+  const tx = (await db()).transaction('meta', 'readwrite')
+  const store = tx.objectStore('meta')
+  const stored = (await store.get(META_KEY)) as PracticeMeta | undefined
+  // Same migration `loadPracticeMeta` does, for the same reason: a legacy
+  // record that reached this path would otherwise be counted from a
+  // `practiceCount` it does not have, and the unlock timeline would survive the
+  // write.
+  const current = stored ? migratePracticeMeta(stored) : undefined
+  const next = advance(current)
+  await store.put(next, META_KEY)
+  await tx.done
+  return next
+}
+
 export async function loadPracticeMeta(): Promise<PracticeMeta | undefined> {
   const database = await db()
   // The store holds settings under another key as well, so what comes back here

@@ -1,6 +1,6 @@
 # 0029 — Six days of ordinary use retires the practice ladder
 
-**Status:** OPEN — a product call about what "practice" counts as.
+**Status:** RESOLVED (user call, 2026-08-12) — see the resolution at the bottom.
 
 ## The behaviour
 
@@ -68,3 +68,33 @@ so it waits for the same ruling rather than being patched twice.
 
 James picks a shape, or says "your call" — in which case option 1 goes in, with
 the counter made transactional in the same change.
+
+## RESOLUTION (user call, 2026-08-12 — via exec assistant)
+
+1. **Leave it as-is.** James said users who use it a lot probably don’t need the practice, and frequent unlocking can count as enough practice to reduce prompts. The spaced schedule remains a floor on nagging rather than a strict measure of recall gaps.
+
+## What was done (2026-08-12)
+
+Option 3, so `srs/schedule.ts` and `INTERVALS_DAYS` are untouched and every
+keyed unlock still advances the ladder. `recordPracticeUnlock` now says that is
+the intent rather than leaving the next reader to wonder whether it was noticed.
+
+The lost update the doc parked — "it waits for the same ruling rather than being
+patched twice" — is fixed, because the ruling no longer changes what the fix
+would look like. `updatePracticeMeta` in `storage/db.ts` does the read, the
+increment and the write on **one** readwrite transaction; IndexedDB runs those
+one at a time over a store, so the tab and the popup unlocking in the same
+moment now count twice instead of once. It migrates a legacy record on the way
+through for the same reason `loadPracticeMeta` does — otherwise a record still
+carrying the old timeline would be counted from a `practiceCount` it does not
+have, and the timeline would survive the write.
+
+Three tests cover it (`storage/db.test.ts`), and they are careful about what
+they claim: the in-memory stand-in for `idb` cannot serialise transactions, so
+the atomicity itself is IndexedDB's and untested here. What is asserted is the
+half that is ours — one `readwrite` transaction over `meta`, a `get` and a `put`
+on it, and nothing issued outside it, which is exactly how the gap would come
+back. The real-browser journey gate exercises the path against genuine
+IndexedDB.
+
+**Status stays RESOLVED.**

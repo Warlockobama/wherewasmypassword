@@ -11,14 +11,27 @@ import type { StoredVault } from './db.ts'
 
 const store = new Map<string, Map<string, unknown>>()
 
-function objectStore(name: string) {
+/**
+ * What each call went through, so a test can ask *where* a read or a write
+ * happened and not only what it left behind. `updatePracticeMeta` exists to keep
+ * a read and a write in one transaction, and that is invisible in the data.
+ */
+const transactions: { stores: string[]; mode?: string; ops: string[] }[] = []
+const looseOps: string[] = []
+
+function objectStore(name: string, ops?: string[]) {
   return {
-    get: async (key: string) => store.get(name)?.get(key),
+    get: async (key: string) => {
+      ops?.push(`get:${name}`)
+      return store.get(name)?.get(key)
+    },
     put: async (value: unknown, key: string) => {
+      ops?.push(`put:${name}`)
       if (!store.has(name)) store.set(name, new Map())
       store.get(name)!.set(key, value)
     },
     delete: async (key: string) => {
+      ops?.push(`delete:${name}`)
       store.get(name)?.delete(key)
     },
   }
@@ -26,28 +39,38 @@ function objectStore(name: string) {
 
 vi.mock('idb', () => ({
   openDB: async () => ({
-    get: async (name: string, key: string) => store.get(name)?.get(key),
+    get: async (name: string, key: string) => {
+      looseOps.push(`get:${name}`)
+      return store.get(name)?.get(key)
+    },
     put: async (name: string, value: unknown, key: string) => {
+      looseOps.push(`put:${name}`)
       if (!store.has(name)) store.set(name, new Map())
       store.get(name)!.set(key, value)
     },
     delete: async (name: string, key: string) => {
+      looseOps.push(`delete:${name}`)
       store.get(name)?.delete(key)
     },
     // Single-store callers read `tx.store`; the multi-store ones name what they
     // want with `tx.objectStore(...)`.
-    transaction: (name: string | string[]) => ({
-      store: objectStore(Array.isArray(name) ? name[0] : name),
-      objectStore,
-      done: Promise.resolve(),
-      // Every `abort` in `db.ts` is reached before that transaction has issued a
-      // write, so there is nothing for a real rollback to undo and a no-op is
-      // enough for what the tests below check: that the records on disk did not
-      // move. It does not stand in for the whole of `abort` — a real one also
-      // rejects `tx.done`, which is why `db.ts` swallows that rejection, and
-      // nothing here would notice if it stopped.
-      abort: () => {},
-    }),
+    transaction: (name: string | string[], mode?: string) => {
+      const stores = Array.isArray(name) ? name : [name]
+      const ops: string[] = []
+      transactions.push({ stores, mode, ops })
+      return {
+        store: objectStore(stores[0], ops),
+        objectStore: (of: string) => objectStore(of, ops),
+        done: Promise.resolve(),
+        // Every `abort` in `db.ts` is reached before that transaction has issued
+        // a write, so there is nothing for a real rollback to undo and a no-op
+        // is enough for what the tests below check: that the records on disk did
+        // not move. It does not stand in for the whole of `abort` — a real one
+        // also rejects `tx.done`, which is why `db.ts` swallows that rejection,
+        // and nothing here would notice if it stopped.
+        abort: () => {},
+      }
+    },
   }),
 }))
 
@@ -62,6 +85,7 @@ const {
   saveVault,
   saveVaultSettings,
   undoRestore,
+  updatePracticeMeta,
   VaultAlreadyExistsError,
   VaultSupersededError,
 } = await import('./db.ts')
@@ -101,6 +125,8 @@ function vaultRecord(salt: string, updatedAt: number): StoredVault {
 
 beforeEach(() => {
   store.clear()
+  transactions.length = 0
+  looseOps.length = 0
 })
 
 describe('practice metadata on disk', () => {
@@ -130,6 +156,67 @@ describe('practice metadata on disk', () => {
 
   it('returns undefined when there is nothing stored', async () => {
     expect(await loadPracticeMeta()).toBeUndefined()
+  })
+})
+
+/**
+ * Counting an unlock, which two contexts can do at the same moment.
+ *
+ * `decisions/0029` left the ladder alone but named the read-modify-write
+ * underneath it: load then save is two transactions with a gap, so the tab and
+ * the popup can both read count *n* and both write *n + 1*. The atomicity that
+ * fixes it belongs to IndexedDB, which runs readwrite transactions over a store
+ * one at a time — nothing in the stand-in above reproduces that, and a test
+ * claiming to prove it here would be proving the mock. What is checked instead
+ * is the part that is ours: that the read and the write are issued on one
+ * transaction, so there is a gap for IndexedDB to close.
+ */
+describe('counting a practice unlock', () => {
+  it('reads and writes on a single readwrite transaction', async () => {
+    store.set('meta', new Map([['practice', { createdAt: t0, practiceCount: 2, lastPracticedAt: t0 }]]))
+
+    const next = await updatePracticeMeta((current) => ({
+      ...current!,
+      practiceCount: current!.practiceCount + 1,
+      lastPracticedAt: t0 + DAY,
+    }))
+
+    expect(next).toEqual({ createdAt: t0, practiceCount: 3, lastPracticedAt: t0 + DAY })
+    expect(store.get('meta')!.get('practice')).toEqual(next)
+    expect(transactions).toHaveLength(1)
+    expect(transactions[0].stores).toEqual(['meta'])
+    expect(transactions[0].mode).toBe('readwrite')
+    expect(transactions[0].ops).toEqual(['get:meta', 'put:meta'])
+    // Nothing outside it: a stray `database.get`/`put` is exactly how the gap
+    // comes back.
+    expect(looseOps).toEqual([])
+  })
+
+  it('sees a fresh record when there is nothing stored yet', async () => {
+    const created = await updatePracticeMeta((current) => {
+      expect(current).toBeUndefined()
+      return { createdAt: t0, practiceCount: 1, lastPracticedAt: t0 }
+    })
+
+    expect(store.get('meta')!.get('practice')).toEqual(created)
+  })
+
+  it('collapses a legacy record before counting, rather than counting from zero', async () => {
+    store.set(
+      'meta',
+      new Map([['practice', { createdAt: t0, practicedAt: [t0 + DAY, t0 + 3 * DAY] }]]),
+    )
+
+    const next = await updatePracticeMeta((current) => ({
+      ...current!,
+      practiceCount: current!.practiceCount + 1,
+      lastPracticedAt: t0 + 4 * DAY,
+    }))
+
+    // Three, not one: the two unlocks the legacy timeline recorded still count,
+    // and the timeline itself does not survive the write.
+    expect(next).toEqual({ createdAt: t0, practiceCount: 3, lastPracticedAt: t0 + 4 * DAY })
+    expect('practicedAt' in (store.get('meta')!.get('practice') as object)).toBe(false)
   })
 })
 
