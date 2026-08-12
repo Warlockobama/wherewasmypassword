@@ -1,14 +1,17 @@
-# 0031 — Seven commits of finished work have never left this machine
+# 0031 — Ten commits of finished work have never left this machine
 
 **Status:** OPEN — one small permission question, and it is now visible from
 outside.
 
 ## What is true right now
 
-`master` is seven commits ahead of `origin/master`. The last push was
+`master` is ten commits ahead of `origin/master`. The last push was
 2026-08-09; everything since sits on this disk only:
 
 ```
+fd529d0  Make the review panel say the severity it means, and be readable
+121293f  Count both unlocks when the tab and the popup land together
+c9d9020  Say what v1.1.0's checksum can and cannot prove
 1d91b55  Say what the docs were getting wrong, and open the three calls this leaves
 011e60b  Stop the review going quiet on the passwords it exists to catch
 53ca474  Open the vault that is on disk, not the one the page loaded with
@@ -19,8 +22,10 @@ cff2e32  Close 0025, and name the key the doc missed
 ```
 
 That includes `.gitattributes` — `0028`'s actual fix — the password-review
-feature, a vault-freshness fix, the release guard, and every decision doc from
-`0028` on.
+feature and the three rulings just carried out on it, a vault-freshness fix, the
+release guard, and every decision doc from `0028` on. All five gates are green
+on the tip: 345 tests, a clean-clone build, 39 journey checks, 42 autofill
+checks, and the visual pass.
 
 ## Why it stopped being only a tidiness question today
 
