@@ -1,6 +1,7 @@
 # 0031 — Everything finished since August 9 has never left this machine
 
-**Status:** RESOLVED (user call, 2026-08-14) — see the resolution at the bottom.
+**Status:** RESOLVED (user call, 2026-08-14) — carried out the same day; see the
+resolution and the note under it.
 
 ## What is true right now
 
@@ -85,3 +86,26 @@ release notes are already correct.
 1. **Ruling:** James said "let the thing push" and chose **sessions may push `master` when gates are green**.
 2. **Scope:** This permission covers publishing reviewed, tested commits to `master`; it does not grant release actions like tagging or creating a GitHub release.
 3. **Consequence:** Resume pushes from sessions for green builds so the repository stays current and corrections land whole; release steps remain deliberate and handled by James.
+
+## Carried out (2026-08-14)
+
+All five gates were re-run on the tip rather than remembered — 345 tests over 19
+files, `tsc -b` and the production build, the visual pass, 42 autofill checks and
+39 journey checks, all green — and `master` went to `origin` as a fast-forward:
+`abaf099..be5f6d7`, thirteen commits, everything held since August 9 plus the
+commit carrying this ruling. Local and remote are now the same commit.
+
+Nothing was released. `v1.1.0` is still the only tag on the remote and the
+published zip is untouched, which is the line the ruling drew.
+
+The gap this doc was actually about is closed. The v1.1.0 release notes on GitHub
+are byte-for-byte the same as `release-notes/v1.1.0.md` now on `origin`, and the
+`.gitattributes` those notes credit for pinning line endings is public, so a
+reader who follows the correction to the repository finds the fix rather than the
+tree that caused the problem. Open Dependabot alerts on the repository: none.
+
+The standing rule lives in `CLAUDE.md` rather than only here, because the next
+session reads the ground rules and may never open this doc. It spells out that
+green means all five gates, run on the tip being pushed — the failure this
+permission could cause is publishing a tree nobody re-checked, and a remembered
+test run is how that happens.
