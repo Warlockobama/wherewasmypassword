@@ -60,13 +60,25 @@ commit anyone can check out, not a state of somebody's laptop.
    Builds, then writes `release/wherewasmypassword-<version>.zip` and a
    `.sha256` beside it. It refuses to package a build whose manifest asks for
    any permission set other than exactly `activeTab`, `scripting`, `storage`
-   and `alarms` — fewer is as much a surprise as more — one that requests host
-   permissions at all, or one carrying source maps. Those are not
+   and `alarms` — fewer is as much a surprise as more — one that offers
+   optional permissions or registers a content script (host access by a door
+   the permission check does not watch), one that requests host permissions at
+   all, or one carrying source maps, inline ones included. Those are not
    ceremony: a package is what reaches someone who will never read a manifest.
 
-   **The zip is reproducible.** Every entry is stamped 1980-01-01 rather than
-   with its mtime, so building the same commit twice gives a byte-identical
-   archive and the same SHA-256. That is what makes the published checksum
+   It also refuses to package from a tree with uncommitted work in it, whether
+   or not the version has a tag yet — untracked files included, because
+   `public/` is copied into `dist/` byte for byte and a new file there is in the
+   archive while nothing tracked has changed. `WWMP_PACKAGE_ANYWAY=1` is the way
+   past all of it, for wanting a zip of work in progress on purpose.
+
+   **The zip is reproducible**, and the notes should say which Node major built
+   it: the entry bodies come out of Node's own zlib, so "check out the tag and
+   compare" holds across machines running the same Node major and is not
+   promised across a different one. Every entry is stamped 1980-01-01 rather
+   than with its mtime, and entries are ordered by their path inside the zip
+   rather than by the host's, so building the same commit twice — or on another
+   operating system — gives a byte-identical archive and the same SHA-256. That is what makes the published checksum
    worth publishing: a stranger can check out the tag, run `npm run package`,
    and compare, rather than taking our word for the file. If you ever change
    the packaging, check that property still holds — package twice and diff the

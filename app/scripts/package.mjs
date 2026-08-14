@@ -26,8 +26,12 @@
  *  - Any host permission at all. `activeTab` is the whole reason the popup
  *    exists, and a build that quietly acquired "read and change all your data
  *    on every website" must not be the one that gets a download link.
- *  - Source maps. They are not emitted today; if they ever are, they do not
- *    belong in a shipped artifact.
+ *  - Optional permissions, and registered content scripts. Both are host or
+ *    API access arriving by a door the two checks above do not watch — one
+ *    behind a runtime `permissions.request()`, the other in a `matches` list.
+ *  - Source maps, including the inline kind, which has no `.map` file to
+ *    notice. They are not emitted today; if they ever are, they do not belong
+ *    in a shipped artifact.
  *  - A version that already has a tag, from a tree that is not that tag. Two
  *    different archives called 1.1.0 is the one thing that makes the published
  *    checksum worthless, and `decisions/0027` (ship the review later) is exactly
@@ -89,11 +93,58 @@ async function main() {
         'does not need any (`decisions/0011`), and a release must not be the build that changed that.',
     )
   }
+  // Optional permissions are not a smaller version of permissions: they are the
+  // same grants behind a `chrome.permissions.request()` the user meets once, in
+  // a dialog, with no release note beside it. The check above compares an exact
+  // set precisely so that nothing arrives unannounced, and a build that listed
+  // `tabs` here would have walked straight through it.
+  if (manifest.optional_permissions?.length) {
+    problems.push(
+      `the manifest offers optional permissions ${JSON.stringify(manifest.optional_permissions)}. ` +
+        'Optional or not, they are grants this extension can ask for at runtime, and the ' +
+        'permission set a release ships is the one written down.',
+    )
+  }
+  // A registered content script carries its own host access in `matches`, which
+  // never appears in `host_permissions` — the same door, a different frame.
+  // Nothing is registered today; `content.js` is injected through `scripting`
+  // against the tab `activeTab` conferred, which is the whole design.
+  if (manifest.content_scripts?.length) {
+    problems.push(
+      'the manifest registers content scripts. Their `matches` are host access that no ' +
+        'host-permission check sees, and this extension injects through `scripting` on the ' +
+        'tab `activeTab` gave it instead (`decisions/0011`).',
+    )
+  }
 
-  const files = (await filesUnder(DIST)).sort()
-  const maps = files.filter((f) => f.endsWith('.map'))
+  // Read `dist/` once: the same bytes get checked and then archived, and the
+  // entries are ordered by the path each will carry *in the zip*, not by the
+  // path the host filesystem uses. Sorting native paths would order `icons/i.png`
+  // against `icons2.png` differently on Windows (`\`, 0x5C) and on POSIX (`/`,
+  // 0x2F), so the same commit could produce two byte-different archives — which
+  // is exactly the cross-platform rebuild the published checksum invites.
+  const entries = []
+  for (const file of await filesUnder(DIST)) {
+    // Zip paths are forward-slashed on every platform, whatever the host uses.
+    entries.push({ path: relative(DIST, file).split(sep).join('/'), body: await readFile(file) })
+  }
+  entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+
+  const maps = entries.filter((e) => e.path.endsWith('.map'))
   if (maps.length) {
-    problems.push(`the build emitted source maps: ${maps.map((f) => relative(DIST, f)).join(', ')}`)
+    problems.push(`the build emitted source maps: ${maps.map((e) => e.path).join(', ')}`)
+  }
+  // The check above is a filename, and `build.sourcemap: 'inline'` emits no
+  // filename at all — it base64s the map into the bottom of the .js. Same
+  // source, shipped, past a check looking for a `.map`.
+  const inlined = entries.filter(
+    (e) => /\.(js|css|html)$/.test(e.path) && e.body.includes('sourceMappingURL=data:'),
+  )
+  if (inlined.length) {
+    problems.push(
+      `these carry an inline source map: ${inlined.map((e) => e.path).join(', ')}. ` +
+        'A map with no filename is still the source.',
+    )
   }
 
   // Asked of git rather than of the tree, and only when the version already has
@@ -116,14 +167,6 @@ async function main() {
   const name = `wherewasmypassword-${manifest.version}.zip`
   const zipPath = join(OUT_DIR, name)
 
-  const entries = []
-  for (const file of files) {
-    entries.push({
-      // Zip paths are forward-slashed on every platform, whatever the host uses.
-      path: relative(DIST, file).split(sep).join('/'),
-      body: await readFile(file),
-    })
-  }
   const zip = buildZip(entries)
   await writeFile(zipPath, zip)
 

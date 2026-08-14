@@ -22,8 +22,20 @@
  * The gap widens with every feature that lands before the next release, which is
  * why it is a refusal and not a note in a doc nobody reads at the wrong moment.
  *
- * Not a git checkout, no such tag, or `git` not on PATH — nothing to compare
- * against, so nothing to say. Packaging proceeds.
+ * And whether or not the version has a tag: not from a tree with uncommitted
+ * work in it, because the tag that follows a release has to name a commit that
+ * rebuilds the zip.
+ *
+ * Not a git checkout, or `git` not on PATH — nothing to compare against, so
+ * nothing to say. Packaging proceeds.
+ *
+ * One limit worth naming rather than pretending away: the tag lookup is local.
+ * A tag that exists only on the remote — `gh release create` makes one
+ * server-side, and a shallow or `--no-tags` clone will not have it — reads here
+ * as "no such tag" and packaging proceeds. `RELEASE.md` step 7 tags locally
+ * before publishing, which is what keeps that path out of the normal workflow;
+ * this deliberately does not reach the network to close it, because packaging a
+ * local-only password manager should not require one.
  */
 import { execFileSync } from 'node:child_process'
 
@@ -50,18 +62,24 @@ function git(args, cwd) {
  *
  * `dirty` is scoped to `cwd` (the app directory): an edited decision doc does
  * not change a byte of the zip, and refusing to package over one would be
- * ceremony. Untracked files are excluded for the same reason — `dist/` and
- * `release/` are gitignored, but a stray scratch file is not the build.
+ * ceremony.
+ *
+ * Untracked files count. They were excluded on the grounds that a stray scratch
+ * file is not the build — true of a scratch file, and false of the one place it
+ * matters: `public/` is copied into `dist/` byte for byte, so a new file
+ * dropped there is *in the archive* while no tracked file has changed. Every
+ * output directory is gitignored (`dist/`, `release/`, `screenshots/`,
+ * `node_modules/`, `*.tsbuildinfo`), and git does not report ignored paths here,
+ * so what is left is a file that is genuinely in this tree and in no commit.
  */
 export function tagFacts(version, cwd) {
   const tag = `v${version}`
   const tagSha = git(['rev-list', '-n', '1', tag], cwd)
-  if (!tagSha) return { tag, tagSha: null, headSha: null, dirty: [] }
   return {
     tag,
     tagSha,
-    headSha: git(['rev-parse', 'HEAD'], cwd),
-    dirty: (git(['status', '--porcelain', '--untracked-files=no', '--', '.'], cwd) ?? '')
+    headSha: tagSha ? git(['rev-parse', 'HEAD'], cwd) : null,
+    dirty: (git(['status', '--porcelain', '--', '.'], cwd) ?? '')
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean),
@@ -76,7 +94,28 @@ const short = (sha) => (sha ? sha.slice(0, 7) : 'an unknown commit')
  * Pure — every fact arrives as an argument.
  */
 export function repackageProblem({ version, tag, tagSha, headSha, dirty = [], override = false }) {
-  if (override || !tagSha) return null
+  if (override) return null
+
+  const listed = () => {
+    const shown = dirty.slice(0, 5).join(', ')
+    return dirty.length > 5 ? `${shown}, and ${dirty.length - 5} more` : shown
+  }
+
+  // A version with no tag yet is the normal release path, and there is no
+  // published archive to collide with — but `RELEASE.md` opens by saying a
+  // release should be a commit anyone can check out, not a state of somebody's
+  // laptop, and this is the moment that is decidable. Package 1.2.0 from a tree
+  // with uncommitted work in it and the tag that follows points at a commit that
+  // does not rebuild the zip, which is the whole failure `decisions/0028` is
+  // about, arriving a second time by a different road.
+  if (!tagSha) {
+    if (!dirty.length) return null
+    return (
+      `this tree has uncommitted changes in app/: ${listed()}. Version ${version} has no tag ` +
+      `yet, so what is packaged now is what ${tag} will be expected to rebuild — and a commit ` +
+      `that does not contain these cannot. Commit them first. Set ${OVERRIDE}=1 to package anyway.`
+    )
+  }
 
   const bumpOrCheckout =
     `Bump the version in public/manifest.json and package.json together ` +
@@ -94,10 +133,8 @@ export function repackageProblem({ version, tag, tagSha, headSha, dirty = [], ov
   }
 
   if (dirty.length) {
-    const shown = dirty.slice(0, 5).join(', ')
-    const rest = dirty.length > 5 ? `, and ${dirty.length - 5} more` : ''
     return (
-      `the tree is at ${tag} but has uncommitted changes in app/: ${shown}${rest}. ` +
+      `the tree is at ${tag} but has uncommitted changes in app/: ${listed()}. ` +
       `The zip would carry ${version}'s name and not ${version}'s contents. ` +
       `Commit them and bump the version, or stash them. Set ${OVERRIDE}=1 to package anyway.`
     )

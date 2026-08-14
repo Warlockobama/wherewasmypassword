@@ -90,6 +90,17 @@ If the answer is to hold, the fallback is to write the CSV-import handling doc,
 so that when import is wanted the decision is already waiting rather than
 starting from nothing.
 
+One thing that changed after this doc was written, the same evening: the
+packaging path was hardened against four cases `RELEASE.md` claimed were already
+refused and were not — optional permissions, a registered content script, an
+inline source map, and an untracked file under `public/`, which is copied into
+`dist/` byte for byte and so lands in the archive while nothing tracked has
+changed. Zip entries are also ordered by their path inside the archive rather
+than by the host's, so a Windows and a Linux build of the same commit cannot
+diverge. None of that changes the answer below; it means that if the answer is
+ship, the machinery doing it is in better shape than when the question was
+asked.
+
 ## Acceptance criteria for resuming
 
 James says ship it — the next session runs steps 1–5 and 8 and hands over the
