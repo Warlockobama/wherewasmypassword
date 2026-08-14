@@ -1,7 +1,6 @@
 # 0031 — Everything finished since August 9 has never left this machine
 
-**Status:** OPEN — one small permission question, and it is now visible from
-outside.
+**Status:** RESOLVED (user call, 2026-08-14) — see the resolution at the bottom.
 
 ## What is true right now
 
@@ -80,3 +79,9 @@ policy for later.
 
 James says which. Nothing else is blocked on it — the work is committed and the
 release notes are already correct.
+
+## RESOLUTION (user call, 2026-08-14 — via exec assistant)
+
+1. **Ruling:** James said "let the thing push" and chose **sessions may push `master` when gates are green**.
+2. **Scope:** This permission covers publishing reviewed, tested commits to `master`; it does not grant release actions like tagging or creating a GitHub release.
+3. **Consequence:** Resume pushes from sessions for green builds so the repository stays current and corrections land whole; release steps remain deliberate and handled by James.

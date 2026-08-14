@@ -29,3 +29,4 @@
 - 2026-08-12 RESOLVED 0028-the-published-checksum-cannot-be-reproduced.md — 1. **Amend the v1.1.0 release notes.** James said "we will create a note in the release note for that particular release
 - 2026-08-12 RESOLVED 0029-ordinary-use-retires-the-practice-ladder.md — 1. **Leave it as-is.** James said users who use it a lot probably don’t need the practice, and frequent unlocking can co
 - 2026-08-12 RESOLVED 0030-three-judgement-calls-in-the-password-review.md — 1. **Adopt the recommended changes.** James said "yeah, go with that", so implement the three recommended adjustments: e
+- 2026-08-14 RESOLVED 0031-nothing-has-been-pushed-since-august-9.md — 1. **Ruling:** James said "let the thing push" and chose **sessions may push `master` when gates are green**.

@@ -16,6 +16,19 @@ Security posture: local-only vault, no telemetry, no network sync. Treat
 any change that touches key derivation, encryption, or storage as
 security-sensitive: prefer parking a decision doc over guessing.
 
+## Pushing
+
+A session may run `git push origin master` once its gates are green —
+`decisions/0031`, where James said "let the thing push". Green means all
+five gates in `RELEASE.md` (`npm test`, `npm run build`, `npm run visual`,
+`npm run autofill`, `npm run journey`), re-run on the tip being pushed, not
+a subset and not a memory of yesterday's run. Finish the sentence: work that
+is committed and gated should not wait on someone else to publish it.
+
+The permission stops there. Tagging, `npm run package` and
+`gh release create` are release acts and remain James's — a push implies
+none of them. `RELEASE.md` is still the list for those.
+
 ## The decision bridge (James's exec assistant ⇄ this repo)
 
 James talks decisions over with his exec assistant by voice; its rulings
