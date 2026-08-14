@@ -339,6 +339,24 @@ describe('the vault-level summary', () => {
     expect(flagged.map((f) => f.label)).toEqual(['Webmail', 'Forum'])
   })
 
+  it('breaks that tie on the finding driving the verdict, not on a lesser one', () => {
+    // `reused` is only serious, but it ranks ahead of every other kind. Ranking
+    // over all findings let it order two entries that are critical for another
+    // reason entirely: a pair sharing a short password sorted above a password
+    // that is a repeated run, on the strength of a finding that is not why
+    // either of them is critical.
+    const { flagged } = auditVault(
+      [
+        cred({ label: 'Alpha', password: 'kitten' }),
+        cred({ label: 'Beta', password: 'kitten' }),
+        cred({ label: 'Gamma', password: '111111' }),
+      ],
+      MASTER,
+    )
+    expect(flagged.every((f) => f.verdict === 'critical')).toBe(true)
+    expect(flagged.map((f) => f.label)).toEqual(['Gamma', 'Alpha', 'Beta'])
+  })
+
   it('counts what the summary line needs and nothing more', () => {
     expect(auditVault(VAULT, MASTER).counts).toEqual({ total: 4, flagged: 3, critical: 1 })
   })
@@ -389,6 +407,24 @@ describe('the ways the rules were wrong', () => {
     expect(kindsOf('monkeymonkeymonkey')).toContain('repeat')
     // Not everything that merely contains a repetition: this is four random
     // words, not one word four times.
+    expect(kindsOf('walnut trellis harbour kiln')).not.toContain('repeat')
+  })
+
+  it('does not let one character on the end turn a repeat into nothing at all', () => {
+    // The gap this closes: the length stops dividing, and the word run is past
+    // the cap so the decorated-word rule cannot catch it either. So the exact
+    // password a site's "must contain a number" produces was reported as
+    // nothing, while the one without the digit was critical.
+    for (const password of ['passwordpassword1', 'monkeymonkeymonkey1', 'aaaaaaaaaaaaaa!']) {
+      expect(kindsOf(password)).toContain('repeat')
+      expect(verdictOf(password)).toBe('critical')
+    }
+    // A run had the same hole — `123456` is caught and `123456!` was clean.
+    expect(kindsOf('123456!')).toContain('sequence')
+    // But what is left has to still be the password. Here the digits are most
+    // of what was typed, so this is not "the repeated unit `ab`".
+    expect(kindsOf(`abab${'1'.repeat(20)}`)).not.toContain('repeat')
+    // And the trailing run is decoration, not letters: this is a passphrase.
     expect(kindsOf('walnut trellis harbour kiln')).not.toContain('repeat')
   })
 
@@ -445,6 +481,19 @@ describe('the ways the rules were wrong', () => {
     // And the word run is still capped, which is what keeps a run-together
     // diceware phrase out of this finding however it is decorated.
     expect(kindsOf('walnuttrellisharbourkiln-2024!!')).toHaveLength(0)
+  })
+
+  it('does not read another script as decoration on the end of a Latin word', () => {
+    // `[^A-Za-z0-9]` is every character this rule's alphabet does not name,
+    // which is every letter of every other script. So `my` plus thirteen
+    // Cyrillic letters read as "a word with punctuation behind it", and the
+    // panel told its owner it was the first pattern anything guessing tries.
+    // The shape being modelled is what an ASCII complexity rule produces.
+    for (const password of ['myпарольдлясайта', 'pass日本語のパスワード', 'sunshine🌞🌻🌈🦄🎈']) {
+      expect(kindsOf(password)).not.toContain('predictable-shape')
+    }
+    // The shapes it does model are untouched by that narrowing.
+    expect(kindsOf('Summer 2024!')).toContain('predictable-shape')
   })
 
   it('does not call a run-together passphrase with a trailing mark a decorated word', () => {

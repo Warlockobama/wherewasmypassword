@@ -37,9 +37,9 @@ export type FindingKind =
   | 'single-class'
   /** A word with a capital and/or a few digits bolted on — the classic shape. */
   | 'predictable-shape'
-  /** The whole password is a run of adjacent characters: 123456, abcdef. */
+  /** A run of adjacent characters, bar trailing decoration: 123456, abcdef, 123456!. */
   | 'sequence'
-  /** The whole password is one short unit repeated: aaaa, abcabc, passwordpassword. */
+  /** One short unit repeated, bar trailing decoration: aaaa, abcabc, passwordpassword1. */
   | 'repeat'
 
 /** How much a finding matters. Ordered worst first by `SEVERITY_RANK`. */
@@ -278,8 +278,31 @@ export function ceilingBits(password: string): number {
  * shape this does not claim to know. What it must not have is an edge that a
  * *more* decorated password falls off.
  */
+/**
+ * What counts as decoration: printable ASCII that is not a letter or a digit —
+ * space through `~`, minus the alphanumerics.
+ *
+ * Written as an explicit range rather than as `[^A-Za-z0-9]`, which is every
+ * character this alphabet does not name, including every letter of every other
+ * script. Under that reading `myпарольдлясайта` was "a word with decoration
+ * behind it" — `my`, then thirteen Cyrillic letters counted as trailing
+ * punctuation — and the panel told its owner that a password with no such shape
+ * was the first pattern anything guessing tries. `pass日本語のパスワード` and a
+ * word with emoji after it went the same way.
+ *
+ * That is the false positive the module's own comments call the one that
+ * matters, because it is how a review panel gets dismissed wholesale, and it
+ * fell on exactly the people whose passwords this rule was never modelling.
+ * The shape being caught is what a site's "one capital, one number, one symbol"
+ * produces on an ASCII keyboard, so ASCII is what the rule reads. Anything
+ * outside it is left to the other findings, which is why `classes.other`
+ * exists.
+ */
+const ASCII_DECORATION = '[\\x20-\\x2F\\x3A-\\x40\\x5B-\\x60\\x7B-\\x7E]'
+
 const DECORATED_WORD = new RegExp(
-  `^(?:[A-Z]?[a-z]{2,${WORD_RUN_MAX}}|[A-Z]{2,${WORD_RUN_MAX}})([^A-Za-z0-9]?)([0-9]*)([^A-Za-z0-9]*)$`,
+  `^(?:[A-Z]?[a-z]{2,${WORD_RUN_MAX}}|[A-Z]{2,${WORD_RUN_MAX}})` +
+    `(${ASCII_DECORATION}?)([0-9]*)(${ASCII_DECORATION}*)$`,
 )
 
 function looksLikeDecoratedWord(password: string): boolean {
@@ -312,6 +335,42 @@ function isRepeat(password: string): boolean {
     if (chars.every((ch, i) => ch === chars[i % unit])) return true
   }
   return false
+}
+
+/**
+ * The password, and what is left of it with trailing decoration taken off.
+ *
+ * `isRepeat` and `isSequence` both ask about the *whole* string, which left the
+ * module with precisely the edge `DECORATED_WORD` above says it must not have:
+ * `passwordpassword` was critical, and `passwordpassword1` — the same password,
+ * plus the one digit a site's complexity rule demanded — was reported as
+ * nothing at all, because the length no longer divides and the word run is past
+ * `WORD_RUN_MAX` so the decorated-word rule could not catch it either.
+ * `aaaaaaaaaaaaaa!` and `123456!` fell through the same gap.
+ *
+ * Two strips rather than one, because a trailing digit is decoration in
+ * `passwordpassword1` and the substance itself in `123456!`. Punctuation comes
+ * off first; digits come off only in the form that also takes punctuation, so a
+ * digit run is never mistaken for an ornament on nothing.
+ *
+ * Two guards keep a fragment from being read as the password: what is left has
+ * to be at least three characters, and at least half of what was typed. Without
+ * the second, `abab` followed by twenty digits would be reported as a repeated
+ * `ab` when the digits are most of what is there.
+ */
+function undecoratedForms(password: string): string[] {
+  const length = [...password].length
+  const keep = (core: string) => {
+    const coreLength = [...core].length
+    return coreLength >= 3 && coreLength * 2 >= length && core !== password
+  }
+  return [
+    password,
+    ...[
+      password.replace(/[\x20-\x2F\x3A-\x40\x5B-\x60\x7B-\x7E]+$/, ''),
+      password.replace(/[^\p{L}]+$/u, ''),
+    ].filter(keep),
+  ]
 }
 
 /** The whole string is a run of adjacent code points, up or down: `abcd`, `4321`. */
@@ -382,9 +441,13 @@ function auditPassword(
     })
   }
 
-  if (isRepeat(password)) {
+  // Asked of the string as stored and of the string with its trailing
+  // decoration off, because a repeat with a `1` after it is still a repeat —
+  // see `undecoratedForms`.
+  const forms = undecoratedForms(password)
+  if (forms.some(isRepeat)) {
     findings.push({ kind: 'repeat', severity: 'critical' })
-  } else if (isSequence(password)) {
+  } else if (forms.some(isSequence)) {
     findings.push({ kind: 'sequence', severity: 'critical' })
   } else if (looksLikeDecoratedWord(password)) {
     findings.push({ kind: 'predictable-shape', severity: 'serious' })
@@ -501,8 +564,16 @@ export function auditVault(credentials: Credential[], masterWords: string[]): Va
     }
   })
 
+  // Only the findings at the entry's own verdict, because the tie-break is
+  // between entries whose severity already matches: what orders them is the
+  // finding *driving* that severity. Ranking over every finding let a lesser one
+  // steer — `reused` is serious and ranks first, so two entries sharing a short
+  // password sorted above an entry whose password is a repeated run, on the
+  // strength of a finding that is not why either of them is critical.
   const worstKind = (entry: CredentialAudit) =>
-    entry.findings.reduce((rank, f) => Math.min(rank, KIND_RANK[f.kind]), Number.MAX_SAFE_INTEGER)
+    entry.findings
+      .filter((f) => f.severity === entry.verdict)
+      .reduce((rank, f) => Math.min(rank, KIND_RANK[f.kind]), Number.MAX_SAFE_INTEGER)
 
   const flagged = all
     .filter((a) => a.verdict !== 'ok')

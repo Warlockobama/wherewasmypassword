@@ -164,8 +164,8 @@ function explain(finding: Finding, entry: CredentialAudit): string {
     case 'predictable-shape':
       return `A word with a capital in front and a digit or two behind is the first pattern anything guessing tries. Counting its character classes gives ${entry.ceilingBits} bits, and it does not get anywhere near that.`
     case 'sequence':
-      return 'The whole password is a run of consecutive characters.'
+      return 'This password is a run of consecutive characters, give or take a digit or symbol on the end.'
     case 'repeat':
-      return 'The whole password is one short run of characters repeated. Repeating it makes it longer without making it harder to guess.'
+      return 'This password is one short run of characters repeated, give or take a digit or symbol on the end. Repeating it makes it longer without making it harder to guess.'
   }
 }
